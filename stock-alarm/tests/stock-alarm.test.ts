@@ -372,16 +372,17 @@ test('layout helpers: display modes, fitting and which symbols show', async () =
   // Short or narrow: fold to the strip
   expect(fitPanel({ want: 5, total: 8, terminalRows: 29, maxRows: 29, columns: 100 })).toBe(0)
   expect(fitPanel({ want: 5, total: 8, terminalRows: 40, maxRows: 40, columns: 59 })).toBe(0)
-  // Fullscreen with a small bottom slot: shrink to fit, then fold
-  expect(fitPanel({ want: 5, total: 8, terminalRows: 34, maxRows: 10, columns: 100 })).toBe(3)
-  expect(fitPanel({ want: 5, total: 8, terminalRows: 34, maxRows: 9, columns: 100 })).toBe(2)
-  expect(fitPanel({ want: 5, total: 8, terminalRows: 34, maxRows: 6, columns: 100 })).toBe(0)
+  // Fullscreen with a small bottom slot: shrink to fit (no strip row under the table), then fold
+  expect(fitPanel({ want: 5, total: 8, terminalRows: 34, maxRows: 10, columns: 100 })).toBe(4)
+  expect(fitPanel({ want: 5, total: 8, terminalRows: 34, maxRows: 9, columns: 100 })).toBe(3)
+  expect(fitPanel({ want: 5, total: 8, terminalRows: 34, maxRows: 8, columns: 100 })).toBe(2)
+  expect(fitPanel({ want: 5, total: 8, terminalRows: 34, maxRows: 7, columns: 100 })).toBe(0)
   // Triggered alarms jump the queue, drawn in watchlist order
   expect(panelSymbols(['A', 'B', 'C', 'D'], { D: 'above' }, 2)).toEqual(['A', 'D'])
   expect(alarmWords({ above: 250, below: 200 })).toBe('above 250.00 · below 200.00')
 })
 
-test('by default the watchlist table is docked above the prompt with the strip under it', async ($, on) => {
+test('by default the watchlist table is docked above the prompt, without the strip', async ($, on) => {
   const saved = new Map<string, unknown>()
   const clock = mock.clock(on)
   stubAll(on, saved, [], [])
@@ -396,8 +397,11 @@ test('by default the watchlist table is docked above the prompt with the strip u
   expect(await band.find({ key: 'dock-rm-AAPL' })).toBeDefined()
   expect(await band.find({ key: 'dock-add' })).toBeDefined()
   expect(await band.find({ type: 'Text', text: PANEL_FOOTER })).toBeDefined()
-  // The one-line strip is still there, under the table
-  expect(await band.find({ type: 'Text', text: 'AAPL 340.42 ▲0.72%' })).toBeDefined()
+  // No one-line strip under the table: the table alone
+  expect(await band.find({ type: 'Text', text: 'AAPL 340.42 ▲0.72%' })).toBeUndefined()
+  expect(await band.find({ type: 'Text', text: /^SA$/ })).toBeUndefined()
+  // The /sa help hint moves into the table's footer
+  expect(await band.find({ type: 'Text', text: BAND_HINT })).toBeDefined()
   // Typing into the table's Add field adds a symbol
   await band.input({ key: 'dock-add', text: 'amd' })
   expect(saved.get('watchlist')).toEqual(['AAPL', 'NVDA', 'MSFT', 'TSLA', 'AMD'])
@@ -672,7 +676,7 @@ test('the docked table says how to set an alarm until one is set', async ($, on)
   await band.unmount()
 
   // Tight fullscreen slot: the symbols keep their rows and the line steps aside
-  band = await dockAt($, 110, 34, 10)
+  band = await dockAt($, 110, 34, 9)
   expect(await band.find({ type: 'Text', text: EMPTY_ALARMS })).toBeUndefined()
   expect(await band.find({ type: 'Text', text: 'SYMBOL' })).toBeDefined()
   await band.unmount()
@@ -699,4 +703,42 @@ test('/sa help leads with setting an alarm', async ($, on) => {
   expect(help).toContain('/sa alert nvda > 250')
   expect(help).toContain('no Claude tokens')
   expect(help.indexOf('Set an alarm')).toBeLessThan(help.indexOf('Watchlist'))
+})
+
+test('the strip shows only when the table folds, in band mode or after /sa undock; hints off clears the table hint', async ($, on) => {
+  const saved = new Map<string, unknown>()
+  const clock = mock.clock(on)
+  stubAll(on, saved, [], [])
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await clock.advance(1)
+  // Docked: table, no strip
+  let band = await dockAt($, 110, 40)
+  expect(await band.find({ type: 'Text', text: 'SYMBOL' })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: /^SA$/ })).toBeUndefined()
+  await band.unmount()
+  // Short terminal: the table folds and the strip takes over
+  band = await dockAt($, 110, 24)
+  expect(await band.find({ type: 'Text', text: 'SYMBOL' })).toBeUndefined()
+  expect(await band.find({ type: 'Text', text: /^SA$/ })).toBeDefined()
+  await band.unmount()
+  // Narrow band: same
+  band = await dockAt($, 50, 40)
+  expect(await band.find({ type: 'Text', text: /^SA$/ })).toBeDefined()
+  await band.unmount()
+  // Undocked: strip only
+  await $.command.run({ command: 'sa', args: 'undock' })
+  band = await dockAt($, 110, 40)
+  expect(await band.find({ type: 'Text', text: 'SYMBOL' })).toBeUndefined()
+  expect(await band.find({ type: 'Text', text: /^SA$/ })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: BAND_HINT })).toBeDefined()
+  await band.unmount()
+  // Docked again with hints off: no hint in the table footer
+  await $.command.run({ command: 'sa', args: 'dock' })
+  await $.command.run({ command: 'sa', args: 'hints off' })
+  band = await dockAt($, 110, 40)
+  expect(await band.find({ type: 'Text', text: 'SYMBOL' })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: BAND_HINT })).toBeUndefined()
+  expect(await band.find({ type: 'Text', text: PANEL_FOOTER })).toBeDefined()
+  await band.unmount()
 })

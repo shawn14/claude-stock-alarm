@@ -3,13 +3,13 @@
 Live stock prices in Claude Code. This **mod** (a Claude Code plugin with a hooks module) keeps your watchlist in view while you work:
 
 - **Watchlist table docked above the prompt**: a boxed SYMBOL / PRICE / CHANGE / ALARM / ACTIONS table (5 rows by default) with an "Add" field and a command footer. It stays on screen while you chat, and a triggered alarm is highlighted in the ALARM column.
-- **Ticker strip under it**: `SA  AAPL 340.42 ▲0.72%  NVDA 230.48 ▼0.03%  MSFT …`, green when a stock is up, red when it's down, and `closed` when the US market is shut. In a short or narrow terminal the table folds away and only this strip shows.
+- **One-line ticker strip when there's no room for the table**: `SA  AAPL 340.42 ▲0.72%  NVDA 230.48 ▼0.03%  MSFT …`, green when a stock is up, red when it's down, and `closed` when the US market is shut. It replaces the table in a short or narrow terminal, with the `band` setting, or after `/sa undock`. While the table is showing, the strip is not drawn.
 - **`/sa` watchlist pane**: the full watchlist with price, change, alerts, an "Add" field, an `open` button per row (opens the symbol's quote page on [Stock Alarm Pro](https://pro.stockalarm.io), e.g. `https://pro.stockalarm.io/quote/NVDA`), and an `x` to remove it.
 - **Local price alerts**: type `/sa alert NVDA above 250` and press Enter. When the price crosses, NVDA is highlighted in the table, strip and pane, and a notification pops up in Claude Code.
 
 ![Stock Alarm in Claude Code](docs/screenshot.png)
 
-*Mockup: the docked watchlist table with a triggered MSFT alert, and the ticker strip above the prompt during a normal Claude Code session.*
+*Mockup: the docked watchlist table with a triggered MSFT alert during a normal Claude Code session. (Drawn before 0.3.1; the ticker strip under the table is no longer shown while the table is docked.)*
 
 ## Requirements
 
@@ -25,7 +25,7 @@ claude plugin install stock-alarm@stock-alarm
 
 Or, inside a Claude Code session: `/plugin marketplace add shawn14/claude-stock-alarm`, then `/plugin install stock-alarm@stock-alarm`.
 
-Restart Claude Code (`/restart`) or run `/reload-plugins` in an open session. The watchlist table and ticker strip appear above the prompt within a few seconds.
+Restart Claude Code (`/restart`) or run `/reload-plugins` in an open session. The watchlist table appears above the prompt within a few seconds.
 
 Update: `claude plugin marketplace update stock-alarm && claude plugin update stock-alarm@stock-alarm`
 Turn it off: `claude plugin disable stock-alarm@stock-alarm` (or `/plugin` → Installed → stock-alarm)
@@ -53,9 +53,9 @@ Good to know:
 
 ## Usage
 
-Type these in the prompt and press Enter. Not sure what to type? Run **`/sa help`**. The ticker strip ends with a dim
-`· /sa help` hint when there's room for it (it's the first thing dropped in a narrow terminal, so it never pushes a quote
-off), and the first time the mod runs it shows a one-time tip: *Stock Alarm: to set an alarm, type /sa alert NVDA above
+Type these in the prompt and press Enter. Not sure what to type? Run **`/sa help`**. The docked table's footer ends with a
+dim `· /sa help` hint, and the ticker strip ends with one when there's room for it (it's the first thing dropped in a
+narrow terminal, so it never pushes a quote off). The first time the mod runs it shows a one-time tip: *Stock Alarm: to set an alarm, type /sa alert NVDA above
 250 and press Enter · /sa opens your watchlist · /sa help for more*.
 
 | Command | What it does |
@@ -72,8 +72,8 @@ off), and the first time the mod runs it shows a one-time tip: *Stock Alarm: to 
 | `/sa alert NVDA 250` | No above or below: the mod compares 250 with NVDA's current price, picks above (250 is higher) or below (250 is lower), and tells you which it chose |
 | `/sa dock` / `/sa dock 8` | Dock the watchlist table above the prompt (optionally with a row count, 1 to 25) |
 | `/sa undock` | Just the one-line ticker strip, no table |
-| `/sa hide` / `/sa show` | Hide or show the ticker (table and strip) |
-| `/sa hints off` / `/sa hints on` | Hide or show the `· /sa help` hint in the strip (for power users) |
+| `/sa hide` / `/sa show` | Hide or show the ticker (table or strip) |
+| `/sa hints off` / `/sa hints on` | Hide or show the `· /sa help` hint in the table footer and strip (for power users) |
 | `/sa refresh` | Refresh quotes now |
 | `/sa reset` | Back to the default watchlist, alarms cleared |
 | `/sa help` | List the commands |
@@ -90,9 +90,14 @@ The table lives in Claude Code's band above the prompt, so it stays visible whil
 │ NVDA    230.48    ▼0.03%    above 250.00                  open · x       │
 │ MSFT    522.61    ▼0.02%    below 525.00 · TRIGGERED      open · x       │
 │ TSLA    375.00    ▼0.01%    —                             open · x       │
-│ Add: symbol… ⏎ add      /sa add · /sa rm · /sa alert NVDA above 250 · …  │
+│ Add: symbol… ⏎ add      /sa add · /sa rm · /sa alert NVDA…  · /sa help   │
 ╰──────────────────────────────────────────────────────────────────────────╯
-SA  AAPL 340.42 ▼0.00%  NVDA 230.48 ▼0.03%  ! MSFT 522.61 ▼0.02%  TSLA 375.00 ▼0.01%  closed
+```
+
+The table is drawn on its own. When it folds away, this one-line strip takes its place:
+
+```
+SA  AAPL 340.42 ▼0.00%  NVDA 230.48 ▼0.03%  ! MSFT 522.61 ▼0.02%  TSLA 375.00 ▼0.01%  closed  · /sa help
 ```
 
 - It shows up to 5 symbols (the `panel_rows` setting, or `/sa dock N`). With more on the list, triggered alarms are shown

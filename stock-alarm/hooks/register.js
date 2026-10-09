@@ -1,8 +1,8 @@
 // Stock Alarm (SA) mod for Claude Code.
 //
 // Shows live quotes for a small watchlist while you code: a boxed watchlist
-// table docked in the band above the prompt with a one-line ticker strip under
-// it (or the strip alone, or a status line), a /sa pane with the full table, and
+// table docked in the band above the prompt (or a one-line ticker strip, or a
+// status line), a /sa pane with the full table, and
 // price alarms that highlight a symbol and pop a toast when it crosses a threshold.
 //
 // The docked table lives in the AbovePrompt render site (the band): it stays on
@@ -19,7 +19,8 @@ const DEFAULT_WATCHLIST = ['AAPL', 'NVDA', 'MSFT', 'TSLA']
 // Stock Alarm Pro quote page: https://pro.stockalarm.io/quote/<SYMBOL>
 const QUOTE_PAGE = 'https://pro.stockalarm.io/quote/'
 const MAX_SYMBOLS = 25
-// Dim hint at the end of the ticker strip; the first thing dropped when space is short
+// Dim hint at the end of the ticker strip and the docked table's footer; the
+// first thing dropped from the strip when space is short
 export const BAND_HINT = '· /sa help'
 // Shown once per user (flag kept in $.store), a moment after the first session starts
 export const FIRST_RUN_TIP = 'Stock Alarm: to set an alarm, type /sa alert NVDA above 250 and press Enter · /sa opens your watchlist · /sa help for more'
@@ -51,7 +52,7 @@ let opts = {}
 let watchlist = DEFAULT_WATCHLIST.slice()
 let alerts = {} // { SYM: { above?: number, below?: number } }
 let bandHidden = false
-let hintsHidden = false // /sa hints off: no "· /sa help" in the strip or status line
+let hintsHidden = false // /sa hints off: no "· /sa help" in the table, strip or status line
 let dockOverride // /sa dock: true, /sa undock: false, unset: follow the display option
 let panelRowsSaved // /sa dock N: rows of the docked table; unset: the panel_rows option
 let quotes = {} // { SYM: normalized quote }
@@ -234,7 +235,7 @@ export function inferSide(level, price) {
 }
 
 // The band's layout for a display option and the /sa dock | undock override:
-// 'panel' (docked table + strip), 'band' (strip only), 'status' or 'off'
+// 'panel' (docked table, or the strip when it folds), 'band' (strip only), 'status' or 'off'
 export function displayMode(display, docked) {
   if (docked === true) return 'panel'
   if (docked === false) return 'band'
@@ -251,11 +252,12 @@ export function panelHeight(symbolRows, hasMore, hasEmptyAlarms = false) {
 
 // How many symbol rows the docked table draws, or 0 to fold to the one-line strip.
 // Folds when the terminal is under PANEL_MIN_TERMINAL_ROWS rows or the band under
-// PANEL_MIN_COLUMNS columns; otherwise shrinks to fit maxRows with the strip under it.
+// PANEL_MIN_COLUMNS columns; otherwise shrinks to fit maxRows. The strip isn't drawn
+// under the table, so the table gets every row of the band.
 export function fitPanel({ want, total, terminalRows, maxRows, columns }) {
   if (!total || columns < PANEL_MIN_COLUMNS) return 0
   if (terminalRows !== undefined && terminalRows < PANEL_MIN_TERMINAL_ROWS) return 0
-  const budget = maxRows - 1 // the strip's row
+  const budget = maxRows
   let n = Math.max(1, Math.min(want, total))
   while (n > 0 && panelHeight(n, total > n) > budget) n -= 1
   if (n < Math.min(2, total)) return 0
@@ -342,8 +344,8 @@ const HELP = [
   'Display',
   '  /sa dock [rows]            dock the watchlist table above the prompt (default 5 rows)',
   '  /sa undock                 just the one-line ticker strip',
-  '  /sa hide | /sa show        hide or show the ticker (table and strip)',
-  '  /sa hints off | on         hide or show the "/sa help" hint in the strip',
+  '  /sa hide | /sa show        hide or show the ticker (table or strip)',
+  '  /sa hints off | on         hide or show the "/sa help" hint',
   '  /sa refresh                refresh quotes now',
   '  /sa reset                  default watchlist, all alarms cleared',
   '  /sa help                   this list',
@@ -826,7 +828,8 @@ function panelBox($, ui, width, rows, showEmptyAlarms = false) {
           }),
         ],
       }),
-      Text({ dimColor: true, wrap: 'truncate', children: [PANEL_FOOTER] }),
+      Box({ flexGrow: 1, flexShrink: 1, children: [Text({ dimColor: true, wrap: 'truncate', children: [PANEL_FOOTER] })] }),
+      ...(hintsHidden ? [] : [Box({ flexShrink: 0, children: [Text({ dimColor: true, children: [BAND_HINT] })] })]),
     ],
   })
   return Box({
@@ -871,8 +874,9 @@ export function register(on, options) {
   on('command.run', { command: 'sa-add' }, async ($, e) => handleCommand($, 'add ' + (e.args || ''))).catch(failed)
   on('command.run', { command: 'sa-rm' }, async ($, e) => handleCommand($, 'rm ' + (e.args || ''))).catch(failed)
 
-  // The band above the prompt: the docked watchlist table with the strip under
-  // it, or the strip alone
+  // The band above the prompt: the docked watchlist table on its own, or the
+  // one-line strip when the table folds (short or narrow terminal), in band
+  // mode, or after /sa undock
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const m = mode()
     if (m !== 'panel' && m !== 'band') return next(e)
@@ -881,7 +885,6 @@ export function register(on, options) {
     const { Box } = ui
     const props = e.props || {}
     const width = Math.max(20, props.bodyColumns || 80)
-    const strip = stripRow(ui, width)
     let rows = 0
     let showEmpty = false
     // A survey holds the band first: fold to the strip while one shows
@@ -889,10 +892,10 @@ export function register(on, options) {
       const maxRows = typeof props.maxRows === 'number' ? props.maxRows : 40
       const terminalRows = e.viewport && typeof e.viewport.rows === 'number' ? e.viewport.rows : maxRows
       rows = fitPanel({ want: panelRowsWanted(), total: watchlist.length, terminalRows, maxRows, columns: width })
-      // "No alarms yet" gets its own row when there's room for it beside the symbols and the strip
-      showEmpty = rows > 0 && alarmCount(watchlist, alerts) === 0 && panelHeight(rows, watchlist.length > rows, true) <= maxRows - 1
+      // "No alarms yet" gets its own row when there's room for it beside the symbols
+      showEmpty = rows > 0 && alarmCount(watchlist, alerts) === 0 && panelHeight(rows, watchlist.length > rows, true) <= maxRows
     }
-    const mine = rows > 0 ? Box({ flexDirection: 'column', children: [panelBox($, ui, width, rows, showEmpty), strip] }) : strip
+    const mine = rows > 0 ? panelBox($, ui, width, rows, showEmpty) : stripRow(ui, width)
     const theirs = await next(e)
     return theirs ? Box({ flexDirection: 'column', children: [mine, theirs] }) : mine
   })
