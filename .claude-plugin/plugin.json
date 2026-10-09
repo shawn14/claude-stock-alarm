@@ -1,0 +1,19 @@
+{
+  "name": "stock-alarm",
+  "version": "0.3.1",
+  "description": "Stock Alarm for Claude Code: live stock quotes and price alerts in your terminal. Install with: claude plugin marketplace add shawn14/claude-stock-alarm, then claude plugin install stock-alarm@stock-alarm. The plugin itself lives in ./stock-alarm.",
+  "author": {
+    "name": "Shawn Carpenter",
+    "email": "shawn14@gmail.com"
+  },
+  "homepage": "https://stockalarm.io",
+  "repository": "https://github.com/shawn14/claude-stock-alarm",
+  "license": "MIT",
+  "keywords": [
+    "stocks",
+    "stock-alarm",
+    "quotes",
+    "price-alerts",
+    "mod"
+  ]
+}
