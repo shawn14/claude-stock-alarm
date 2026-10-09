@@ -11,7 +11,8 @@
 const PANE = 'stock-alarm'
 const DEFAULT_ENDPOINT = 'https://stockalarm-8b019.firebaseio.com/tickers/{symbol}.json'
 const DEFAULT_WATCHLIST = ['AAPL', 'NVDA', 'MSFT', 'TSLA']
-const SYMBOL_PAGE = 'https://app.stockalarm.io/symbols/'
+// Stock Alarm Pro quote page: https://pro.stockalarm.io/quote/<SYMBOL>
+const QUOTE_PAGE = 'https://pro.stockalarm.io/quote/'
 const MAX_SYMBOLS = 25
 // Dim hint at the end of the ticker strip; the first thing dropped when space is short
 export const BAND_HINT = '· /sa help'
@@ -42,6 +43,15 @@ export function parseSymbols(text) {
     .split(/[\s,;]+/)
     .map((s) => s.replace(/^\$/, '').trim())
     .filter((s) => /^[A-Z0-9][A-Z0-9.\-^=]{0,14}$/.test(s))
+}
+
+// Stock Alarm Pro quote page for a symbol. The route only accepts upper case
+// (lower case 404s) and uses dots for share classes (BRK.B), so a class-share
+// hyphen like BRK-B or BF-B becomes a dot.
+export function quoteUrl(symbol) {
+  let s = String(symbol || '').trim().replace(/^\$/, '').toUpperCase()
+  if (/^[A-Z]{1,5}-[A-Z]$/.test(s)) s = s.replace('-', '.')
+  return QUOTE_PAGE + encodeURIComponent(s)
 }
 
 function num(v) {
@@ -179,7 +189,7 @@ const HELP = [
   '  /sa add AMD PLTR           add symbols (also /sa-add)',
   '  /sa rm TSLA                remove symbols (also /sa-rm)',
   '  /sa list                   print the watchlist with quotes',
-  '  /sa open NVDA              open NVDA on stockalarm.io',
+  '  /sa open NVDA              open NVDA on Stock Alarm Pro',
   '',
   'Alarms',
   '  /sa alert NVDA above 250   alarm when NVDA trades at or above 250',
@@ -310,7 +320,7 @@ async function showStatus($) {
 }
 
 async function openSymbol($, symbol) {
-  const url = SYMBOL_PAGE + encodeURIComponent(symbol)
+  const url = quoteUrl(symbol)
   try {
     const r = await $.process.run(['open', url], { timeoutMs: 10000 })
     if (r.exitCode !== 0) throw new Error(r.stderr || 'open failed')

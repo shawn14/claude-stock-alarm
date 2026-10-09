@@ -3,7 +3,7 @@
 Live stock prices in Claude Code. This **mod** (a Claude Code plugin with a hooks module) keeps your watchlist in view while you work:
 
 - **Ticker strip above the prompt**: `SA  AAPL 340.42 ▲0.72%  NVDA 230.48 ▼0.03%  MSFT …`, green when a stock is up, red when it's down, and `closed` when the US market is shut.
-- **`/sa` watchlist pane**: the full watchlist with price, change, alerts, an "Add" field, an `open` button per row (opens the symbol on stockalarm.io), and an `x` to remove it.
+- **`/sa` watchlist pane**: the full watchlist with price, change, alerts, an "Add" field, an `open` button per row (opens the symbol's quote page on [Stock Alarm Pro](https://pro.stockalarm.io), e.g. `https://pro.stockalarm.io/quote/NVDA`), and an `x` to remove it.
 - **Local price alerts**: `/sa alert NVDA above 250` highlights NVDA in the strip and pane and shows a toast in Claude Code when the price crosses.
 
 ![Stock Alarm in Claude Code](docs/screenshot.png)
@@ -42,7 +42,7 @@ shows a one-time tip: *Stock Alarm: /sa to open watchlist · /sa add AMD · /sa 
 | `/sa add AMD PLTR` or `/sa-add AMD PLTR` | Add symbols (up to 25) |
 | `/sa rm TSLA` or `/sa-rm TSLA` | Remove symbols |
 | `/sa list` | Print the watchlist with fresh quotes |
-| `/sa open NVDA` | Open NVDA on stockalarm.io in your browser |
+| `/sa open NVDA` | Open NVDA's Stock Alarm Pro quote page (`https://pro.stockalarm.io/quote/NVDA`) in your browser. Symbols are upper-cased and share classes use a dot (`/sa open brk-b` opens `/quote/BRK.B`) |
 | `/sa alert NVDA above 250` | Alarm when NVDA trades at or above 250 |
 | `/sa alert NVDA below 200` | Alarm when NVDA trades at or below 200 |
 | `/sa alert NVDA clear` | Remove the alarms on NVDA |

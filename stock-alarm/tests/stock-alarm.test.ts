@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { normalizeQuote, parseSymbols, alarmState, fmtPct, alarmCount, BAND_HINT, EMPTY_ALARMS, FIRST_RUN_TIP, PANE_FOOTER } from '../hooks/register.js'
+import { normalizeQuote, parseSymbols, alarmState, fmtPct, alarmCount, BAND_HINT, EMPTY_ALARMS, FIRST_RUN_TIP, PANE_FOOTER, quoteUrl } from '../hooks/register.js'
 
 // A tickers/<SYMBOL> node shaped like Stock Alarm's feed
 const node = (symbol: string, latestPrice: number, previousClose: number) => ({
@@ -19,7 +19,7 @@ const PRICES: Record<string, [number, number]> = {
   AMD: [150, 148],
 }
 
-function stubAll(on: any, saved: Map<string, unknown>, toasts: string[], urls: string[]) {
+function stubAll(on: any, saved: Map<string, unknown>, toasts: string[], urls: string[], runs: string[][] = []) {
   on('store.get', ($: any, e: any) => ({ value: saved.get(e.key) }))
   on('store.set', ($: any, e: any) => {
     saved.set(e.key, e.value)
@@ -34,7 +34,10 @@ function stubAll(on: any, saved: Map<string, unknown>, toasts: string[], urls: s
   on('ui.status', () => ({ value: undefined }))
   on('ui.log', () => ({ value: undefined }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
-  on('process.run', () => ({ value: { exitCode: 0, stdout: '', stderr: '' } }))
+  on('process.run', ($: any, e: any) => {
+    runs.push([...e.argv])
+    return { value: { exitCode: 0, stdout: '', stderr: '' } }
+  })
   on('http.fetch', ($: any, e: any) => {
     urls.push(e.url)
     const sym = decodeURIComponent(e.url.split('/tickers/')[1].replace('.json', ''))
@@ -285,4 +288,55 @@ test('/sa help lists every command, including hints', async ($, on) => {
     expect(help.text).toContain(cmd)
   }
   expect(alarmCount(['NVDA', 'AAPL'], { NVDA: { above: 1 }, TSLA: { below: 2 } })).toBe(1)
+})
+
+// ---------- open: Stock Alarm Pro quote page ----------
+
+test('quoteUrl points at the Stock Alarm Pro quote page in the form the route expects', async () => {
+  expect(quoteUrl('NVDA')).toBe('https://pro.stockalarm.io/quote/NVDA')
+  expect(quoteUrl('nvda')).toBe('https://pro.stockalarm.io/quote/NVDA')
+  expect(quoteUrl(' $aapl ')).toBe('https://pro.stockalarm.io/quote/AAPL')
+  expect(quoteUrl('BRK.B')).toBe('https://pro.stockalarm.io/quote/BRK.B')
+  expect(quoteUrl('brk-b')).toBe('https://pro.stockalarm.io/quote/BRK.B')
+  expect(quoteUrl('BF-B')).toBe('https://pro.stockalarm.io/quote/BF.B')
+  expect(quoteUrl('BTC-USD')).toBe('https://pro.stockalarm.io/quote/BTC-USD')
+  expect(quoteUrl('^GSPC')).toBe('https://pro.stockalarm.io/quote/%5EGSPC')
+  expect(quoteUrl('NVDA')).not.toContain('app.stockalarm.io')
+})
+
+test('/sa open opens the Stock Alarm Pro quote page', async ($, on) => {
+  const saved = new Map<string, unknown>()
+  const runs: string[][] = []
+  const clock = mock.clock(on)
+  stubAll(on, saved, [], [], runs)
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await clock.advance(1)
+  const r = await $.command.run({ command: 'sa', args: 'open nvda' })
+  expect(r.text).toBe('Opened https://pro.stockalarm.io/quote/NVDA')
+  expect(runs).toContainEqual(['open', 'https://pro.stockalarm.io/quote/NVDA'])
+
+  const brk = await $.command.run({ command: 'sa', args: 'open brk.b' })
+  expect(brk.text).toBe('Opened https://pro.stockalarm.io/quote/BRK.B')
+
+  const usage = await $.command.run({ command: 'sa', args: 'open' })
+  expect(usage.text).toBe('Usage: /sa open NVDA')
+
+  const help = await $.command.run({ command: 'sa', args: 'help' })
+  expect(help.text).toContain('open NVDA on Stock Alarm Pro')
+})
+
+test("the pane's open button opens the Stock Alarm Pro quote page", async ($, on) => {
+  const saved = new Map<string, unknown>()
+  const runs: string[][] = []
+  const clock = mock.clock(on)
+  stubAll(on, saved, [], [], runs)
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await clock.advance(1)
+  const pane = await mountPane($)
+  await pane.press({ key: 'open-MSFT' })
+  expect(runs).toContainEqual(['open', 'https://pro.stockalarm.io/quote/MSFT'])
+  expect(runs.some((argv) => argv.some((a) => a.includes('app.stockalarm.io')))).toBe(false)
+  await pane.unmount()
 })
