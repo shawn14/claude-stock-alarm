@@ -1,7 +1,7 @@
 {
   "name": "stock-alarm",
-  "version": "0.2.1",
-  "description": "Stock Alarm (SA) mod: a live watchlist ticker strip above the prompt, a /sa watchlist pane, local price alerts, and /sa commands to add, remove, and open symbols on Stock Alarm Pro (pro.stockalarm.io). Quotes come from Stock Alarm's public tickers feed.",
+  "version": "0.3.0",
+  "description": "Stock Alarm (SA) mod: a boxed watchlist table docked above the prompt with a live ticker strip under it, a /sa watchlist pane, local price alerts, and /sa commands to add, remove, dock, and open symbols on Stock Alarm Pro (pro.stockalarm.io). Quotes come from Stock Alarm's public tickers feed.",
   "author": {
     "name": "Shawn Carpenter",
     "email": "shawn14@gmail.com"
@@ -39,14 +39,23 @@
     },
     "display": {
       "type": "string",
-      "title": "Where to show the ticker",
-      "description": "band: a strip above the prompt. status: one line under the prompt. off: only the /sa pane.",
+      "title": "Where to show the watchlist",
+      "description": "panel: a boxed watchlist table docked above the prompt with the ticker strip under it (folds to the strip when the terminal is under 30 rows or 60 columns). band: just the one-line strip above the prompt. status: one line under the prompt. off: only the /sa pane. /sa dock and /sa undock override this.",
       "options": [
+        "panel",
         "band",
         "status",
         "off"
       ],
-      "default": "band"
+      "default": "panel"
+    },
+    "panel_rows": {
+      "type": "number",
+      "title": "Docked table rows",
+      "description": "How many symbols the docked table shows (triggered alarms first). /sa dock N overrides this.",
+      "default": 5,
+      "min": 1,
+      "max": 25
     }
   }
 }

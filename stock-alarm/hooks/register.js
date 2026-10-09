@@ -1,8 +1,13 @@
 // Stock Alarm (SA) mod for Claude Code.
 //
-// Shows live quotes for a small watchlist while you code: a ticker band above
-// the prompt (or a status line), a /sa pane with the full table, and price
-// alarms that highlight a symbol and pop a toast when it crosses a threshold.
+// Shows live quotes for a small watchlist while you code: a boxed watchlist
+// table docked in the band above the prompt with a one-line ticker strip under
+// it (or the strip alone, or a status line), a /sa pane with the full table, and
+// price alarms that highlight a symbol and pop a toast when it crosses a threshold.
+//
+// The docked table lives in the AbovePrompt render site (the band): it stays on
+// screen while you chat, and the band shows a tree of up to e.props.maxRows rows
+// whole. The table folds back to the strip in short or narrow terminals.
 //
 // Data source: Stock Alarm's own public tickers feed (Firebase RTDB
 // tickers/<SYMBOL>.json, read-only, no key). Swap it with the
@@ -21,6 +26,14 @@ export const FIRST_RUN_TIP = 'Stock Alarm: /sa to open watchlist · /sa add AMD 
 const FIRST_RUN_TIP_KEY = 'firstRunTipShown'
 const FIRST_RUN_TIP_DELAY_MS = 1500
 export const EMPTY_ALARMS = 'No alarms. Try /sa alert NVDA above 250'
+// The docked table (display "panel", /sa dock)
+export const DEFAULT_PANEL_ROWS = 5
+// Below this many terminal rows, or this many band columns, the table folds to the strip
+export const PANEL_MIN_TERMINAL_ROWS = 30
+export const PANEL_MIN_COLUMNS = 60
+// Command footer on the docked table's last row, beside its Add field
+export const PANEL_FOOTER = '/sa add · /sa rm · /sa alert NVDA above 250 · /sa open NVDA'
+const DISPLAYS = ['panel', 'band', 'status', 'off']
 
 // ---------- module state (rebuilt on reload; durable bits live in $.store) ----------
 let opts = {}
@@ -28,6 +41,8 @@ let watchlist = DEFAULT_WATCHLIST.slice()
 let alerts = {} // { SYM: { above?: number, below?: number } }
 let bandHidden = false
 let hintsHidden = false // /sa hints off: no "· /sa help" in the strip or status line
+let dockOverride // /sa dock: true, /sa undock: false, unset: follow the display option
+let panelRowsSaved // /sa dock N: rows of the docked table; unset: the panel_rows option
 let quotes = {} // { SYM: normalized quote }
 let errors = {} // { SYM: message }
 let lastUpdated = 0
@@ -142,6 +157,64 @@ function describeAlert(a) {
   return parts.join(' ')
 }
 
+// An alarm in words for the docked table: "above 250.00", "below 200.00", or both
+export function alarmWords(a) {
+  if (!a) return ''
+  const parts = []
+  if (a.above !== undefined) parts.push('above ' + fmtPrice(a.above))
+  if (a.below !== undefined) parts.push('below ' + fmtPrice(a.below))
+  return parts.join(' · ')
+}
+
+// The band's layout for a display option and the /sa dock | undock override:
+// 'panel' (docked table + strip), 'band' (strip only), 'status' or 'off'
+export function displayMode(display, docked) {
+  if (docked === true) return 'panel'
+  if (docked === false) return 'band'
+  if (display === undefined || display === '') return 'panel'
+  return DISPLAYS.includes(display) ? display : 'panel'
+}
+
+// Rows the docked table takes: its border (2), title, column header, one per
+// symbol, a "+N more" row when the list is longer, and the Add/commands row
+export function panelHeight(symbolRows, hasMore) {
+  return 2 + 1 + 1 + symbolRows + (hasMore ? 1 : 0) + 1
+}
+
+// How many symbol rows the docked table draws, or 0 to fold to the one-line strip.
+// Folds when the terminal is under PANEL_MIN_TERMINAL_ROWS rows or the band under
+// PANEL_MIN_COLUMNS columns; otherwise shrinks to fit maxRows with the strip under it.
+export function fitPanel({ want, total, terminalRows, maxRows, columns }) {
+  if (!total || columns < PANEL_MIN_COLUMNS) return 0
+  if (terminalRows !== undefined && terminalRows < PANEL_MIN_TERMINAL_ROWS) return 0
+  const budget = maxRows - 1 // the strip's row
+  let n = Math.max(1, Math.min(want, total))
+  while (n > 0 && panelHeight(n, total > n) > budget) n -= 1
+  if (n < Math.min(2, total)) return 0
+  return n
+}
+
+// The symbols the docked table shows when it can't show them all: triggered
+// alarms first, then the watchlist's order, drawn in watchlist order
+export function panelSymbols(list, firingMap, n) {
+  if (list.length <= n) return list.slice()
+  const pick = new Set(list.filter((s) => firingMap && firingMap[s]).slice(0, n))
+  for (const s of list) {
+    if (pick.size >= n) break
+    pick.add(s)
+  }
+  return list.filter((s) => pick.has(s))
+}
+
+function mode() {
+  return displayMode(opts.display, dockOverride)
+}
+
+function panelRowsWanted() {
+  const n = Number(panelRowsSaved ?? opts.panel_rows ?? DEFAULT_PANEL_ROWS)
+  return Number.isFinite(n) ? Math.min(MAX_SYMBOLS, Math.max(1, Math.round(n))) : DEFAULT_PANEL_ROWS
+}
+
 function timeOf(ms) {
   if (!ms) return 'never'
   const d = new Date(ms)
@@ -185,7 +258,7 @@ const HELP = [
   'Stock Alarm commands',
   '',
   'Watchlist',
-  '  /sa                        open the watchlist pane (Esc closes it)',
+  '  /sa                        open the full watchlist pane (Esc closes it)',
   '  /sa add AMD PLTR           add symbols (also /sa-add)',
   '  /sa rm TSLA                remove symbols (also /sa-rm)',
   '  /sa list                   print the watchlist with quotes',
@@ -197,12 +270,15 @@ const HELP = [
   '  /sa alert NVDA clear       remove the alarms on NVDA',
   '',
   'Display',
-  '  /sa hide | /sa show        hide or show the ticker strip',
+  '  /sa dock [rows]            dock the watchlist table above the prompt (default 5 rows)',
+  '  /sa undock                 just the one-line ticker strip',
+  '  /sa hide | /sa show        hide or show the ticker (table and strip)',
   '  /sa hints off | on         hide or show the "/sa help" hint in the strip',
   '  /sa refresh                refresh quotes now',
   '  /sa reset                  default watchlist, all alarms cleared',
   '  /sa help                   this list',
   '',
+  'The docked table folds to the strip when the terminal is under 30 rows or 60 columns.',
   'Alarms are local: they fire while a Claude Code session is open.',
 ].join('\n')
 
@@ -226,6 +302,8 @@ async function loadSaved($) {
   const savedAlerts = await $.store.get('alerts')
   const savedHidden = await $.store.get('bandHidden')
   const savedHints = await $.store.get('hintsHidden')
+  const savedDocked = await $.store.get('docked')
+  const savedRows = await $.store.get('panelRows')
   if (Array.isArray(savedList) && savedList.length) watchlist = parseSymbols(savedList.join(' ')).slice(0, MAX_SYMBOLS)
   else {
     const fromOpts = parseSymbols(opts.watchlist)
@@ -234,6 +312,8 @@ async function loadSaved($) {
   alerts = savedAlerts && typeof savedAlerts === 'object' ? { ...savedAlerts } : {}
   bandHidden = savedHidden === true
   hintsHidden = savedHints === true
+  dockOverride = typeof savedDocked === 'boolean' ? savedDocked : undefined
+  panelRowsSaved = typeof savedRows === 'number' && Number.isFinite(savedRows) ? savedRows : undefined
 }
 
 // The one-time first-run tip. Returns true when it was shown.
@@ -315,7 +395,7 @@ async function checkAlarms($) {
 }
 
 async function showStatus($) {
-  if (opts.display !== 'status' || bandHidden) return
+  if (mode() !== 'status' || bandHidden) return
   $.ui.status(tickerLine() + (hintsHidden ? '' : '  ' + BAND_HINT))
 }
 
@@ -431,10 +511,41 @@ async function handleCommand($, argText) {
     await refresh($)
     return { text: tickerLine() }
   }
+  if (sub === 'dock' || sub === 'panel') {
+    const arg = words[1]
+    if (arg !== undefined) {
+      const n = Number(arg)
+      if (!Number.isInteger(n) || n < 1 || n > MAX_SYMBOLS) return { text: 'Usage: /sa dock [rows], rows from 1 to ' + MAX_SYMBOLS + ' (default ' + DEFAULT_PANEL_ROWS + ').' }
+      panelRowsSaved = n
+      await $.store.set('panelRows', n)
+    }
+    const wasStatus = mode() === 'status'
+    dockOverride = true
+    bandHidden = false
+    await $.store.set('docked', true)
+    await $.store.set('bandHidden', false)
+    if (wasStatus) $.ui.status(undefined)
+    $.ui.invalidate('ui.render')
+    return {
+      text:
+        'Watchlist docked above the prompt (' + panelRowsWanted() + ' rows). It folds to the one-line strip when the terminal is under ' +
+        PANEL_MIN_TERMINAL_ROWS + ' rows or ' + PANEL_MIN_COLUMNS + ' columns. /sa undock for the strip only.',
+    }
+  }
+  if (sub === 'undock' || sub === 'strip') {
+    const wasStatus = mode() === 'status'
+    dockOverride = false
+    bandHidden = false
+    await $.store.set('docked', false)
+    await $.store.set('bandHidden', false)
+    if (wasStatus) $.ui.status(undefined)
+    $.ui.invalidate('ui.render')
+    return { text: 'Undocked: just the one-line ticker strip. /sa dock brings the table back.' }
+  }
   if (sub === 'hide') {
     bandHidden = true
     await $.store.set('bandHidden', true)
-    if (opts.display === 'status') $.ui.status(undefined)
+    if (mode() === 'status') $.ui.status(undefined)
     $.ui.invalidate('ui.render')
     return { text: 'Ticker hidden. /sa show brings it back.' }
   }
@@ -468,7 +579,7 @@ async function handleCommand($, argText) {
 
 async function registerCommands($) {
   const specs = [
-    { name: 'sa', description: 'Stock Alarm: open the watchlist pane, or add | rm | alert | open | list | help', argumentHint: '[add|rm|alert|open|list|refresh|hide|show|hints|reset|help] [args]', immediate: true },
+    { name: 'sa', description: 'Stock Alarm: open the watchlist pane, or add | rm | alert | open | dock | undock | list | help', argumentHint: '[add|rm|alert|open|list|dock|undock|refresh|hide|show|hints|reset|help] [args]', immediate: true },
     { name: 'sa-add', description: 'Stock Alarm: add symbols to the watchlist', argumentHint: '<SYMBOL ...>', immediate: true },
     { name: 'sa-rm', description: 'Stock Alarm: remove symbols from the watchlist', argumentHint: '<SYMBOL ...>', immediate: true },
   ]
@@ -484,6 +595,145 @@ async function registerCommands($) {
 // A failed /sa command prints a short error instead of nothing
 function failed($, e, next) {
   return { text: 'Stock Alarm: ' + ((next.error && next.error.message) || 'command failed') }
+}
+
+// ---------- band drawing ----------
+
+// The one-line ticker strip: SA  AAPL 340.42 ▲0.72%  NVDA ...  · /sa help
+function stripRow(ui, width) {
+  const { Box, Text } = ui
+  const items = [Text({ bold: true, color: 'yellow', children: ['SA'] })]
+  let used = 3
+  let shown = 0
+  let truncated = false
+  for (const s of watchlist) {
+    const q = quotes[s]
+    const label = s + ' ' + (q ? fmtPrice(q.price) + ' ' + fmtPct(q.pct) : errors[s] ? '?' : '…')
+    const firingSide = firing[s]
+    const cell = (firingSide ? '! ' : '') + label
+    if (used + cell.length + 2 > width - 4 && shown > 0) {
+      items.push(Text({ dimColor: true, children: ['+' + (watchlist.length - shown)] }))
+      truncated = true
+      break
+    }
+    used += cell.length + 2
+    shown += 1
+    if (firingSide) {
+      items.push(Text({ bold: true, inverse: true, color: firingSide === 'above' ? 'green' : 'red', children: [cell] }))
+    } else {
+      const c = colorFor(q && q.pct)
+      items.push(Text(c ? { color: c, children: [label] } : { children: [label] }))
+    }
+  }
+  const open = anyOpen()
+  if (open === false && used + 8 < width) {
+    items.push(Text({ dimColor: true, children: ['closed'] }))
+    used += 8
+  }
+  // The hint goes last and only into room that's left, so it never pushes a quote off
+  if (!hintsHidden && !truncated && used + BAND_HINT.length + 2 <= width - 4) {
+    items.push(Text({ dimColor: true, children: [BAND_HINT] }))
+  }
+  return Box({ flexDirection: 'row', columnGap: 2, children: items })
+}
+
+// The docked watchlist table: SYMBOL / PRICE / CHANGE / ALARM / ACTIONS, an Add
+// field and the command footer, in a rounded box `rows` symbols tall
+function panelBox($, ui, width, rows) {
+  const { Box, Text, Button, Input } = ui
+  const inner = Math.max(20, width - 4) // border and one column of padding each side
+  const W = { sym: 8, price: 10, change: 10, actions: 10 }
+  W.alarm = Math.max(12, inner - W.sym - W.price - W.change - W.actions)
+  const cell = (w, text) => Box({ width: w, flexShrink: 0, children: [text] })
+  const open = anyOpen()
+  const syms = panelSymbols(watchlist, firing, rows)
+  const more = watchlist.length - syms.length
+
+  const title = Box({
+    flexDirection: 'row',
+    children: [
+      Text({ bold: true, children: ['Stock Alarm · Watchlist'] }),
+      Text({
+        dimColor: true,
+        wrap: 'truncate',
+        children: [' (/sa) · refreshed ' + timeOf(lastUpdated) + (open === undefined ? '' : open ? ' · market open' : ' · market closed')],
+      }),
+    ],
+  })
+  const head = (w, label) => cell(w, Text({ bold: true, dimColor: true, wrap: 'truncate', children: [label] }))
+  const header = Box({
+    flexDirection: 'row',
+    children: [head(W.sym, 'SYMBOL'), head(W.price, 'PRICE'), head(W.change, 'CHANGE'), head(W.alarm, 'ALARM'), head(W.actions, 'ACTIONS')],
+  })
+  const body = syms.map((s) => {
+    const q = quotes[s]
+    const side = firing[s]
+    const words = alarmWords(alerts[s])
+    const c = colorFor(q && q.pct)
+    const tint = (w, text) => cell(w, Text(c ? { color: c, wrap: 'truncate', children: [text] } : { wrap: 'truncate', children: [text] }))
+    const alarm = side
+      ? Text({ bold: true, inverse: true, color: 'yellow', wrap: 'truncate', children: [(words || side) + ' · TRIGGERED'] })
+      : words
+        ? Text({ color: 'yellow', wrap: 'truncate', children: [words] })
+        : Text({ dimColor: true, children: ['—'] })
+    return Box({
+      key: 'dock-row-' + s,
+      flexDirection: 'row',
+      children: [
+        cell(W.sym, Text(side ? { bold: true, color: side === 'above' ? 'green' : 'red', children: [s] } : { bold: true, wrap: 'truncate', children: [s] })),
+        cell(W.price, Text({ wrap: 'truncate', children: [q ? fmtPrice(q.price) : errors[s] ? '?' : '…'] })),
+        tint(W.change, q ? fmtPct(q.pct) || '—' : ''),
+        cell(W.alarm, alarm),
+        Box({
+          width: W.actions,
+          flexShrink: 0,
+          flexDirection: 'row',
+          children: [
+            Button({ key: 'dock-open-' + s, label: 'open', plain: true, onPress: async () => { await openSymbol($, s) } }),
+            Text({ dimColor: true, children: [' · '] }),
+            Button({ key: 'dock-rm-' + s, label: 'x', plain: true, onPress: async () => { await removeSymbols($, [s]) } }),
+          ],
+        }),
+      ],
+    })
+  })
+  const footer = Box({
+    flexDirection: 'row',
+    columnGap: 2,
+    children: [
+      Box({
+        width: 22,
+        flexShrink: 0,
+        children: [
+          Input({
+            key: 'dock-add',
+            label: 'Add',
+            placeholder: 'symbol…',
+            value: '',
+            submitLabel: 'add',
+            onSubmit: async (value) => {
+              const list = parseSymbols(value)
+              if (list.length) await addSymbols($, list)
+            },
+          }),
+        ],
+      }),
+      Text({ dimColor: true, wrap: 'truncate', children: [PANEL_FOOTER] }),
+    ],
+  })
+  return Box({
+    flexDirection: 'column',
+    borderStyle: 'round',
+    borderColor: Object.keys(firing).length ? 'red' : 'yellow',
+    paddingX: 1,
+    children: [
+      title,
+      header,
+      ...body,
+      ...(more > 0 ? [Text({ dimColor: true, children: ['+' + more + ' more · /sa for the full list · /sa dock ' + Math.min(MAX_SYMBOLS, watchlist.length) + ' to show all'] })] : []),
+      footer,
+    ],
+  })
 }
 
 // ---------- hooks ----------
@@ -512,45 +762,25 @@ export function register(on, options) {
   on('command.run', { command: 'sa-add' }, async ($, e) => handleCommand($, 'add ' + (e.args || ''))).catch(failed)
   on('command.run', { command: 'sa-rm' }, async ($, e) => handleCommand($, 'rm ' + (e.args || ''))).catch(failed)
 
-  // The ticker band above the prompt
+  // The band above the prompt: the docked watchlist table with the strip under
+  // it, or the strip alone
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (opts.display !== undefined && opts.display !== 'band') return next(e)
+    const m = mode()
+    if (m !== 'panel' && m !== 'band') return next(e)
     if (bandHidden || !watchlist.length) return next(e)
-    const { Box, Text } = $.ui.resolve(e)
-    const width = Math.max(20, (e.props && e.props.bodyColumns) || 80)
-    const items = [Text({ bold: true, color: 'yellow', children: ['SA'] })]
-    let used = 3
-    let shown = 0
-    let truncated = false
-    for (const s of watchlist) {
-      const q = quotes[s]
-      const label = s + ' ' + (q ? fmtPrice(q.price) + ' ' + fmtPct(q.pct) : errors[s] ? '?' : '…')
-      const firingSide = firing[s]
-      const cell = (firingSide ? '! ' : '') + label
-      if (used + cell.length + 2 > width - 4 && shown > 0) {
-        items.push(Text({ dimColor: true, children: ['+' + (watchlist.length - shown)] }))
-        truncated = true
-        break
-      }
-      used += cell.length + 2
-      shown += 1
-      if (firingSide) {
-        items.push(Text({ bold: true, inverse: true, color: firingSide === 'above' ? 'green' : 'red', children: [cell] }))
-      } else {
-        const c = colorFor(q && q.pct)
-        items.push(Text(c ? { color: c, children: [label] } : { children: [label] }))
-      }
+    const ui = $.ui.resolve(e)
+    const { Box } = ui
+    const props = e.props || {}
+    const width = Math.max(20, props.bodyColumns || 80)
+    const strip = stripRow(ui, width)
+    let rows = 0
+    // A survey holds the band first: fold to the strip while one shows
+    if (m === 'panel' && !props.hasSurvey) {
+      const maxRows = typeof props.maxRows === 'number' ? props.maxRows : 40
+      const terminalRows = e.viewport && typeof e.viewport.rows === 'number' ? e.viewport.rows : maxRows
+      rows = fitPanel({ want: panelRowsWanted(), total: watchlist.length, terminalRows, maxRows, columns: width })
     }
-    const open = anyOpen()
-    if (open === false && used + 8 < width) {
-      items.push(Text({ dimColor: true, children: ['closed'] }))
-      used += 8
-    }
-    // The hint goes last and only into room that's left, so it never pushes a quote off
-    if (!hintsHidden && !truncated && used + BAND_HINT.length + 2 <= width - 4) {
-      items.push(Text({ dimColor: true, children: [BAND_HINT] }))
-    }
-    const mine = Box({ flexDirection: 'row', columnGap: 2, children: items })
+    const mine = rows > 0 ? Box({ flexDirection: 'column', children: [panelBox($, ui, width, rows), strip] }) : strip
     const theirs = await next(e)
     return theirs ? Box({ flexDirection: 'column', children: [mine, theirs] }) : mine
   })

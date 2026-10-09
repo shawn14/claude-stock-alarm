@@ -1,5 +1,8 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { normalizeQuote, parseSymbols, alarmState, fmtPct, alarmCount, BAND_HINT, EMPTY_ALARMS, FIRST_RUN_TIP, PANE_FOOTER, quoteUrl } from '../hooks/register.js'
+import {
+  normalizeQuote, parseSymbols, alarmState, fmtPct, alarmCount, BAND_HINT, EMPTY_ALARMS, FIRST_RUN_TIP, PANE_FOOTER, quoteUrl,
+  PANEL_FOOTER, displayMode, fitPanel, panelHeight, panelSymbols, alarmWords,
+} from '../hooks/register.js'
 
 // A tickers/<SYMBOL> node shaped like Stock Alarm's feed
 const node = (symbol: string, latestPrice: number, previousClose: number) => ({
@@ -284,7 +287,7 @@ test('/sa help lists every command, including hints', async ($, on) => {
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
   await clock.advance(1)
   const help = await $.command.run({ command: 'sa', args: 'help' })
-  for (const cmd of ['/sa add', '/sa rm', '/sa alert NVDA above 250', '/sa alert NVDA below 200', '/sa alert NVDA clear', '/sa open', '/sa hints off', '/sa hide']) {
+  for (const cmd of ['/sa add', '/sa rm', '/sa alert NVDA above 250', '/sa alert NVDA below 200', '/sa alert NVDA clear', '/sa open', '/sa hints off', '/sa hide', '/sa dock', '/sa undock']) {
     expect(help.text).toContain(cmd)
   }
   expect(alarmCount(['NVDA', 'AAPL'], { NVDA: { above: 1 }, TSLA: { below: 2 } })).toBe(1)
@@ -339,4 +342,197 @@ test("the pane's open button opens the Stock Alarm Pro quote page", async ($, on
   expect(runs).toContainEqual(['open', 'https://pro.stockalarm.io/quote/MSFT'])
   expect(runs.some((argv) => argv.some((a) => a.includes('app.stockalarm.io')))).toBe(false)
   await pane.unmount()
+})
+
+// ---------- the docked watchlist table (display "panel", /sa dock | undock) ----------
+
+// The band in a terminal `rows` tall: maxRows is the terminal's height on the main screen
+const dockAt = ($: any, columns: number, rows: number, maxRows = rows) =>
+  $.ui.mount({
+    plugin: 'stock-alarm',
+    component: 'AbovePrompt',
+    requestId: 'above',
+    surface: 'terminal',
+    viewport: { columns: columns + 5, rows },
+    props: { hasSurvey: false, isWorking: false, maxRows, bodyColumns: columns, scroll: { offset: 0, bodyRows: maxRows - 1 }, view: {} },
+  } as any)
+
+test('layout helpers: display modes, fitting and which symbols show', async () => {
+  expect(displayMode(undefined, undefined)).toBe('panel')
+  expect(displayMode('band', undefined)).toBe('band')
+  expect(displayMode('band', true)).toBe('panel')
+  expect(displayMode('panel', false)).toBe('band')
+  expect(displayMode('status', undefined)).toBe('status')
+  expect(panelHeight(5, false)).toBe(10)
+  // Roomy: all five rows
+  expect(fitPanel({ want: 5, total: 8, terminalRows: 40, maxRows: 40, columns: 100 })).toBe(5)
+  // Short or narrow: fold to the strip
+  expect(fitPanel({ want: 5, total: 8, terminalRows: 29, maxRows: 29, columns: 100 })).toBe(0)
+  expect(fitPanel({ want: 5, total: 8, terminalRows: 40, maxRows: 40, columns: 59 })).toBe(0)
+  // Fullscreen with a small bottom slot: shrink to fit, then fold
+  expect(fitPanel({ want: 5, total: 8, terminalRows: 34, maxRows: 10, columns: 100 })).toBe(3)
+  expect(fitPanel({ want: 5, total: 8, terminalRows: 34, maxRows: 9, columns: 100 })).toBe(2)
+  expect(fitPanel({ want: 5, total: 8, terminalRows: 34, maxRows: 6, columns: 100 })).toBe(0)
+  // Triggered alarms jump the queue, drawn in watchlist order
+  expect(panelSymbols(['A', 'B', 'C', 'D'], { D: 'above' }, 2)).toEqual(['A', 'D'])
+  expect(alarmWords({ above: 250, below: 200 })).toBe('above 250.00 · below 200.00')
+})
+
+test('by default the watchlist table is docked above the prompt with the strip under it', async ($, on) => {
+  const saved = new Map<string, unknown>()
+  const clock = mock.clock(on)
+  stubAll(on, saved, [], [])
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await clock.advance(1)
+  const band = await dockAt($, 110, 40)
+  for (const h of ['SYMBOL', 'PRICE', 'CHANGE', 'ALARM', 'ACTIONS']) expect(await band.find({ type: 'Text', text: h })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: 'Stock Alarm · Watchlist' })).toBeDefined()
+  expect(await band.find({ key: 'dock-row-NVDA' })).toBeDefined()
+  expect(await band.find({ key: 'dock-open-TSLA' })).toBeDefined()
+  expect(await band.find({ key: 'dock-rm-AAPL' })).toBeDefined()
+  expect(await band.find({ key: 'dock-add' })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: PANEL_FOOTER })).toBeDefined()
+  // The one-line strip is still there, under the table
+  expect(await band.find({ type: 'Text', text: 'AAPL 340.42 ▲0.72%' })).toBeDefined()
+  // Typing into the table's Add field adds a symbol
+  await band.input({ key: 'dock-add', text: 'amd' })
+  expect(saved.get('watchlist')).toEqual(['AAPL', 'NVDA', 'MSFT', 'TSLA', 'AMD'])
+  await band.unmount()
+})
+
+test('the docked table folds to the strip in a short or narrow terminal', async ($, on) => {
+  const saved = new Map<string, unknown>()
+  const clock = mock.clock(on)
+  stubAll(on, saved, [], [])
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await clock.advance(1)
+  const short = await dockAt($, 110, 24)
+  expect(await short.find({ type: 'Text', text: 'SYMBOL' })).toBeUndefined()
+  expect(await short.find({ type: 'Text', text: 'AAPL 340.42' })).toBeDefined()
+  await short.unmount()
+
+  const narrow = await dockAt($, 50, 40)
+  expect(await narrow.find({ type: 'Text', text: 'SYMBOL' })).toBeUndefined()
+  expect(await narrow.find({ type: 'Text', text: /^\+\d/ })).toBeDefined()
+  await narrow.unmount()
+
+  // Exactly 30 rows is enough
+  const ok = await dockAt($, 110, 30)
+  expect(await ok.find({ type: 'Text', text: 'SYMBOL' })).toBeDefined()
+  await ok.unmount()
+})
+
+test('a triggered alarm is highlighted in the table and shown even past the row limit', async ($, on) => {
+  const saved = new Map<string, unknown>()
+  const clock = mock.clock(on)
+  stubAll(on, saved, [], [])
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await clock.advance(1)
+  await $.command.run({ command: 'sa', args: 'alert TSLA below 400' })
+  await $.command.run({ command: 'sa', args: 'alert NVDA above 250' })
+  const dock = await $.command.run({ command: 'sa', args: 'dock 2' })
+  expect(dock.text).toContain('2 rows')
+  expect(saved.get('panelRows')).toBe(2)
+
+  const band = await dockAt($, 110, 40)
+  const hit = await band.find({ type: 'Text', text: 'below 400.00 · TRIGGERED' })
+  expect(hit).toBeDefined()
+  expect(hit!.props.inverse).toBe(true)
+  expect(await band.find({ key: 'dock-row-TSLA' })).toBeDefined()
+  expect(await band.find({ key: 'dock-row-AAPL' })).toBeDefined()
+  expect(await band.find({ key: 'dock-row-MSFT' })).toBeUndefined()
+  expect(await band.find({ type: 'Text', text: '+2 more' })).toBeDefined()
+  await band.unmount()
+
+  // A set alarm that hasn't triggered shows plain
+  await $.command.run({ command: 'sa', args: 'dock 5' })
+  const all = await dockAt($, 110, 40)
+  const armed = await all.find({ type: 'Text', text: 'above 250.00' })
+  expect(armed).toBeDefined()
+  expect(armed!.props.inverse).toBeUndefined()
+  await all.unmount()
+
+  const bad = await $.command.run({ command: 'sa', args: 'dock 99' })
+  expect(bad.text).toContain('Usage: /sa dock')
+})
+
+test('/sa undock leaves just the strip, /sa dock brings the table back, and both are saved', async ($, on) => {
+  const saved = new Map<string, unknown>()
+  const clock = mock.clock(on)
+  stubAll(on, saved, [], [])
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await clock.advance(1)
+  const undock = await $.command.run({ command: 'sa', args: 'undock' })
+  expect(undock.text).toContain('Undocked')
+  expect(saved.get('docked')).toBe(false)
+  let band = await dockAt($, 110, 40)
+  expect(await band.find({ type: 'Text', text: 'SYMBOL' })).toBeUndefined()
+  expect(await band.find({ type: 'Text', text: 'AAPL 340.42' })).toBeDefined()
+  await band.unmount()
+
+  // Still undocked after a reload
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await clock.advance(1)
+  band = await dockAt($, 110, 40)
+  expect(await band.find({ type: 'Text', text: 'SYMBOL' })).toBeUndefined()
+  await band.unmount()
+
+  const dock = await $.command.run({ command: 'sa', args: 'dock' })
+  expect(dock.text).toContain('docked')
+  expect(saved.get('docked')).toBe(true)
+  band = await dockAt($, 110, 40)
+  expect(await band.find({ type: 'Text', text: 'SYMBOL' })).toBeDefined()
+  await band.unmount()
+  expect(saved.get('watchlist')).toBeUndefined() // "dock" is not taken as a symbol
+})
+
+test('display "band" shows just the strip until /sa dock', { options: { display: 'band' } }, async ($, on) => {
+  const saved = new Map<string, unknown>()
+  const clock = mock.clock(on)
+  stubAll(on, saved, [], [])
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await clock.advance(1)
+  let band = await dockAt($, 110, 40)
+  expect(await band.find({ type: 'Text', text: 'SYMBOL' })).toBeUndefined()
+  expect(await band.find({ type: 'Text', text: 'NVDA 230.48' })).toBeDefined()
+  await band.unmount()
+
+  await $.command.run({ command: 'sa', args: 'dock' })
+  band = await dockAt($, 110, 40)
+  expect(await band.find({ type: 'Text', text: 'SYMBOL' })).toBeDefined()
+  await band.unmount()
+})
+
+test('display "panel" with panel_rows 2 shows two rows', { options: { display: 'panel', panel_rows: 2 } }, async ($, on) => {
+  const saved = new Map<string, unknown>()
+  const clock = mock.clock(on)
+  stubAll(on, saved, [], [])
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await clock.advance(1)
+  const band = await dockAt($, 110, 40)
+  expect(await band.find({ key: 'dock-row-NVDA' })).toBeDefined()
+  expect(await band.find({ key: 'dock-row-MSFT' })).toBeUndefined()
+  await band.unmount()
+})
+
+test("the docked table's open button opens the Stock Alarm Pro quote page and x removes the row", async ($, on) => {
+  const saved = new Map<string, unknown>()
+  const runs: string[][] = []
+  const clock = mock.clock(on)
+  stubAll(on, saved, [], [], runs)
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await clock.advance(1)
+  const band = await dockAt($, 110, 40)
+  await band.press({ key: 'dock-open-NVDA' })
+  expect(runs).toContainEqual(['open', 'https://pro.stockalarm.io/quote/NVDA'])
+  await band.press({ key: 'dock-rm-TSLA' })
+  expect(saved.get('watchlist')).toEqual(['AAPL', 'NVDA', 'MSFT'])
+  await band.unmount()
 })
