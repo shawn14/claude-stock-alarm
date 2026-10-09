@@ -2,6 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import {
   normalizeQuote, parseSymbols, alarmState, fmtPct, alarmCount, BAND_HINT, EMPTY_ALARMS, FIRST_RUN_TIP, PANE_FOOTER, quoteUrl,
   PANEL_FOOTER, displayMode, fitPanel, panelHeight, panelSymbols, alarmWords,
+  parseAlertArgs, parsePrice, inferSide, alertUsage,
 } from '../hooks/register.js'
 
 // A tickers/<SYMBOL> node shaped like Stock Alarm's feed
@@ -231,7 +232,9 @@ test('the first-run tip shows once and saves a flag', async ($, on) => {
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
   await clock.advance(2000)
   expect(toasts.filter((t) => t === FIRST_RUN_TIP)).toHaveLength(1)
-  expect(FIRST_RUN_TIP).toBe('Stock Alarm: /sa to open watchlist · /sa add AMD · /sa alert NVDA above 250')
+  expect(FIRST_RUN_TIP).toBe('Stock Alarm: to set an alarm, type /sa alert NVDA above 250 and press Enter · /sa opens your watchlist · /sa help for more')
+  // It leads with the alarm example as a full typed command
+  expect(FIRST_RUN_TIP.indexOf('/sa alert NVDA above 250')).toBeLessThan(FIRST_RUN_TIP.indexOf('/sa opens'))
   expect(saved.get('firstRunTipShown')).toBe(true)
 
   // A later session (same saved state) doesn't show it again
@@ -535,4 +538,165 @@ test("the docked table's open button opens the Stock Alarm Pro quote page and x 
   await band.press({ key: 'dock-rm-TSLA' })
   expect(saved.get('watchlist')).toEqual(['AAPL', 'NVDA', 'MSFT'])
   await band.unmount()
+})
+
+// ---------- setting an alarm: friendly usage and forgiving input ----------
+
+test('parseAlertArgs reads the forgiving forms', async () => {
+  expect(parseAlertArgs('NVDA above 250')).toEqual({ kind: 'set', sym: 'NVDA', side: 'above', level: 250 })
+  expect(parseAlertArgs('NVDA below 200')).toEqual({ kind: 'set', sym: 'NVDA', side: 'below', level: 200 })
+  expect(parseAlertArgs('nvda > 250')).toEqual({ kind: 'set', sym: 'NVDA', side: 'above', level: 250 })
+  expect(parseAlertArgs('nvda < 200')).toEqual({ kind: 'set', sym: 'NVDA', side: 'below', level: 200 })
+  expect(parseAlertArgs('NVDA >= 250')).toEqual({ kind: 'set', sym: 'NVDA', side: 'above', level: 250 })
+  expect(parseAlertArgs('NVDA <= 200')).toEqual({ kind: 'set', sym: 'NVDA', side: 'below', level: 200 })
+  expect(parseAlertArgs('NVDA>=250')).toEqual({ kind: 'set', sym: 'NVDA', side: 'above', level: 250 })
+  expect(parseAlertArgs('NVDA<=$200')).toEqual({ kind: 'set', sym: 'NVDA', side: 'below', level: 200 })
+  expect(parseAlertArgs('NVDA above $250')).toEqual({ kind: 'set', sym: 'NVDA', side: 'above', level: 250 })
+  expect(parseAlertArgs('$nvda over $1,250.50')).toEqual({ kind: 'set', sym: 'NVDA', side: 'above', level: 1250.5 })
+  expect(parseAlertArgs('NVDA under 200')).toEqual({ kind: 'set', sym: 'NVDA', side: 'below', level: 200 })
+  // No direction: side is left for the current price to decide
+  expect(parseAlertArgs('NVDA 250')).toEqual({ kind: 'set', sym: 'NVDA', side: undefined, level: 250 })
+  expect(parseAlertArgs('NVDA $250')).toEqual({ kind: 'set', sym: 'NVDA', side: undefined, level: 250 })
+  expect(parseAlertArgs('NVDA clear')).toEqual({ kind: 'clear', sym: 'NVDA' })
+  expect(parseAlertArgs('nvda OFF')).toEqual({ kind: 'clear', sym: 'NVDA' })
+  // Missing or bad pieces: usage, keeping the symbol when there is one
+  expect(parseAlertArgs('')).toEqual({ kind: 'usage' })
+  expect(parseAlertArgs('above 250')).toEqual({ kind: 'usage' })
+  expect(parseAlertArgs('250')).toEqual({ kind: 'usage' })
+  expect(parseAlertArgs('NVDA')).toEqual({ kind: 'usage', sym: 'NVDA' })
+  expect(parseAlertArgs('NVDA above')).toEqual({ kind: 'usage', sym: 'NVDA' })
+  expect(parseAlertArgs('NVDA sideways 250')).toEqual({ kind: 'usage', sym: 'NVDA' })
+  expect(parseAlertArgs('NVDA above abc')).toEqual({ kind: 'usage', sym: 'NVDA' })
+  expect(parseAlertArgs('NVDA above 0')).toEqual({ kind: 'usage', sym: 'NVDA' })
+  expect(parseAlertArgs('NVDA above -5')).toEqual({ kind: 'usage', sym: 'NVDA' })
+  expect(parseAlertArgs('NVDA above 250 now')).toEqual({ kind: 'usage', sym: 'NVDA' })
+  expect(parsePrice('$1,250')).toBe(1250)
+  expect(parsePrice('.5')).toBe(0.5)
+  expect(parsePrice('2x')).toBeUndefined()
+  expect(inferSide(250, 230.48)).toBe('above')
+  expect(inferSide(200, 230.48)).toBe('below')
+  expect(inferSide(230.48, 230.48)).toBe('above')
+  expect(inferSide(250, undefined)).toBeUndefined()
+})
+
+test('/sa alert with missing or bad arguments shows a friendly usage message with an example', async ($, on) => {
+  const saved = new Map<string, unknown>()
+  const clock = mock.clock(on)
+  stubAll(on, saved, [], [])
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await clock.advance(1)
+  for (const args of ['alert', 'alert   ', 'alert above 250', 'alert 250', 'alarm']) {
+    const r = await $.command.run({ command: 'sa', args })
+    expect(r.text).toBe(alertUsage())
+    expect(r.text).toContain('/sa alert NVDA above 250')
+    expect(r.text).toContain('press Enter')
+    expect(r.text).not.toMatch(/error|usage:/i)
+  }
+  for (const args of ['alert TSLA', 'alert TSLA above', 'alert TSLA sideways 300', 'alert TSLA above abc']) {
+    const r = await $.command.run({ command: 'sa', args })
+    expect(r.text).toBe(alertUsage('TSLA'))
+    expect(r.text).toContain('/sa alert TSLA above 250')
+  }
+  expect(saved.get('alerts')).toBeUndefined()
+  expect(saved.get('watchlist')).toBeUndefined()
+})
+
+test('/sa alert accepts > >= < <= and $ prices', async ($, on) => {
+  const saved = new Map<string, unknown>()
+  const clock = mock.clock(on)
+  stubAll(on, saved, [], [])
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await clock.advance(1)
+  let r = await $.command.run({ command: 'sa', args: 'alert nvda > 250' })
+  expect(r.text).toContain('Alarm set: NVDA above 250.00.')
+  expect(r.text).toContain('ALARM column')
+  r = await $.command.run({ command: 'sa', args: 'alert AAPL >= $400' })
+  expect(r.text).toContain('Alarm set: AAPL above 400.00.')
+  r = await $.command.run({ command: 'sa', args: 'alert MSFT <= 500' })
+  expect(r.text).toContain('Alarm set: MSFT below 500.00.')
+  r = await $.command.run({ command: 'sa', args: 'alert TSLA < $1,000' })
+  expect(r.text).toContain('Alarm set: TSLA below 1000.')
+  expect(saved.get('alerts')).toEqual({ NVDA: { above: 250 }, AAPL: { above: 400 }, MSFT: { below: 500 }, TSLA: { below: 1000 } })
+})
+
+test('/sa alert NVDA 250 picks above or below from the current price and says which', async ($, on) => {
+  const saved = new Map<string, unknown>()
+  const toasts: string[] = []
+  const clock = mock.clock(on)
+  stubAll(on, saved, toasts, [])
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await clock.advance(1)
+  // NVDA is at 230.48
+  let r = await $.command.run({ command: 'sa', args: 'alert NVDA 250' })
+  expect(r.text).toContain('Alarm set: NVDA above 250.00.')
+  expect(r.text).toContain('NVDA is at 230.48, so I chose above.')
+  expect(r.text).toContain('/sa alert NVDA below 250.00')
+  r = await $.command.run({ command: 'sa', args: 'alert NVDA $200' })
+  expect(r.text).toContain('Alarm set: NVDA below 200.00.')
+  expect(r.text).toContain('so I chose below.')
+  expect(saved.get('alerts')).toEqual({ NVDA: { above: 250, below: 200 } })
+
+  // A symbol not on the watchlist: its price is fetched first, then it's added
+  r = await $.command.run({ command: 'sa', args: 'alert amd 100' })
+  expect(r.text).toContain('Alarm set: AMD below 100.00.')
+  expect(r.text).toContain('AMD is at 150.00, so I chose below.')
+  expect(saved.get('watchlist')).toEqual(['AAPL', 'NVDA', 'MSFT', 'TSLA', 'AMD'])
+
+  // No price to compare with: nothing is set, and both choices are spelled out
+  r = await $.command.run({ command: 'sa', args: 'alert ZZZZ 50' })
+  expect(r.text).toContain("Couldn't get ZZZZ's current price")
+  expect(r.text).toContain('/sa alert ZZZZ above 50.00')
+  expect(r.text).toContain('/sa alert ZZZZ below 50.00')
+  expect((saved.get('alerts') as any).ZZZZ).toBeUndefined()
+
+  r = await $.command.run({ command: 'sa', args: 'alert NVDA clear' })
+  expect(r.text).toBe('Cleared alarms on NVDA.')
+  r = await $.command.run({ command: 'sa', args: 'alert NVDA clear' })
+  expect(r.text).toBe('No alarms on NVDA to clear.')
+})
+
+test('the docked table says how to set an alarm until one is set', async ($, on) => {
+  const saved = new Map<string, unknown>()
+  const clock = mock.clock(on)
+  stubAll(on, saved, [], [])
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await clock.advance(1)
+  expect(EMPTY_ALARMS).toBe('No alarms yet. Type /sa alert NVDA above 250 and press Enter')
+  let band = await dockAt($, 110, 40)
+  expect(await band.find({ type: 'Text', text: EMPTY_ALARMS })).toBeDefined()
+  expect(await band.find({ key: 'dock-row-TSLA' })).toBeDefined()
+  await band.unmount()
+
+  // Tight fullscreen slot: the symbols keep their rows and the line steps aside
+  band = await dockAt($, 110, 34, 10)
+  expect(await band.find({ type: 'Text', text: EMPTY_ALARMS })).toBeUndefined()
+  expect(await band.find({ type: 'Text', text: 'SYMBOL' })).toBeDefined()
+  await band.unmount()
+
+  await $.command.run({ command: 'sa', args: 'alert NVDA above 250' })
+  band = await dockAt($, 110, 40)
+  expect(await band.find({ type: 'Text', text: EMPTY_ALARMS })).toBeUndefined()
+  expect(await band.find({ type: 'Text', text: 'above 250.00' })).toBeDefined()
+  await band.unmount()
+  expect(panelHeight(4, false, true)).toBe(10)
+})
+
+test('/sa help leads with setting an alarm', async ($, on) => {
+  const saved = new Map<string, unknown>()
+  const clock = mock.clock(on)
+  stubAll(on, saved, [], [])
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await clock.advance(1)
+  const help = (await $.command.run({ command: 'sa', args: 'help' })).text as string
+  const firstCommand = help.split('\n').find((l) => l.trim().startsWith('/sa'))
+  expect(firstCommand).toContain('/sa alert NVDA above 250')
+  expect(help).toContain('press Enter')
+  expect(help).toContain('/sa alert nvda > 250')
+  expect(help).toContain('no Claude tokens')
+  expect(help.indexOf('Set an alarm')).toBeLessThan(help.indexOf('Watchlist'))
 })

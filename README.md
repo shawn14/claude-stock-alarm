@@ -5,7 +5,7 @@ Live stock prices in Claude Code. This **mod** (a Claude Code plugin with a hook
 - **Watchlist table docked above the prompt**: a boxed SYMBOL / PRICE / CHANGE / ALARM / ACTIONS table (5 rows by default) with an "Add" field and a command footer. It stays on screen while you chat, and a triggered alarm is highlighted in the ALARM column.
 - **Ticker strip under it**: `SA  AAPL 340.42 ▲0.72%  NVDA 230.48 ▼0.03%  MSFT …`, green when a stock is up, red when it's down, and `closed` when the US market is shut. In a short or narrow terminal the table folds away and only this strip shows.
 - **`/sa` watchlist pane**: the full watchlist with price, change, alerts, an "Add" field, an `open` button per row (opens the symbol's quote page on [Stock Alarm Pro](https://pro.stockalarm.io), e.g. `https://pro.stockalarm.io/quote/NVDA`), and an `x` to remove it.
-- **Local price alerts**: `/sa alert NVDA above 250` highlights NVDA in the strip and pane and shows a toast in Claude Code when the price crosses.
+- **Local price alerts**: type `/sa alert NVDA above 250` and press Enter. When the price crosses, NVDA is highlighted in the table, strip and pane, and a notification pops up in Claude Code.
 
 ![Stock Alarm in Claude Code](docs/screenshot.png)
 
@@ -25,17 +25,38 @@ claude plugin install stock-alarm@stock-alarm
 
 Or, inside a Claude Code session: `/plugin marketplace add shawn14/claude-stock-alarm`, then `/plugin install stock-alarm@stock-alarm`.
 
-Start a new `claude` session (or run `/reload-plugins` in an open one). The watchlist table and ticker strip appear above the prompt within a few seconds.
+Restart Claude Code (`/restart`) or run `/reload-plugins` in an open session. The watchlist table and ticker strip appear above the prompt within a few seconds.
 
 Update: `claude plugin marketplace update stock-alarm && claude plugin update stock-alarm@stock-alarm`
 Turn it off: `claude plugin disable stock-alarm@stock-alarm` (or `/plugin` → Installed → stock-alarm)
 Remove it: `claude plugin uninstall stock-alarm@stock-alarm && claude plugin marketplace remove stock-alarm`
 
+## Quick start
+
+1. Restart Claude Code (type `/restart`) or run `/reload-plugins` after installing.
+2. Click into the prompt at the bottom of Claude Code (where the `>` is).
+3. Type `/sa alert NVDA above 250` and press Enter.
+4. The alarm shows in the ALARM column of the watchlist table. When the price crosses 250, the row is highlighted and you get a notification.
+
+More things to try:
+
+- `below` works too: `/sa alert NVDA below 200`. Use any symbol and any price.
+- `/sa alert NVDA clear` removes the alarms on NVDA.
+- `/sa add AMD` adds a symbol to your watchlist.
+- `/sa` on its own opens the full watchlist.
+- `/sa help` lists every command.
+
+Good to know:
+
+- Alarms are local to Claude Code on this computer. They only check prices while Claude Code is open, and they don't go to your phone. For alerts on your phone, get the Stock Alarm app for [iPhone](https://apps.apple.com/us/app/stock-alarm-alerts-tracker/id1465535138) or [Android](https://play.google.com/store/apps/details?id=com.StockMarketAlarms.StockAlarm).
+- These commands don't use Claude tokens. They run inside the mod, not through Claude.
+
 ## Usage
 
-Not sure what to type? Run **`/sa help`**. The ticker strip ends with a dim `· /sa help` hint when there's room for it
-(it's the first thing dropped in a narrow terminal, so it never pushes a quote off), and the first time the mod runs it
-shows a one-time tip: *Stock Alarm: /sa to open watchlist · /sa add AMD · /sa alert NVDA above 250*.
+Type these in the prompt and press Enter. Not sure what to type? Run **`/sa help`**. The ticker strip ends with a dim
+`· /sa help` hint when there's room for it (it's the first thing dropped in a narrow terminal, so it never pushes a quote
+off), and the first time the mod runs it shows a one-time tip: *Stock Alarm: to set an alarm, type /sa alert NVDA above
+250 and press Enter · /sa opens your watchlist · /sa help for more*.
 
 | Command | What it does |
 | --- | --- |
@@ -47,6 +68,8 @@ shows a one-time tip: *Stock Alarm: /sa to open watchlist · /sa add AMD · /sa 
 | `/sa alert NVDA above 250` | Alarm when NVDA trades at or above 250 |
 | `/sa alert NVDA below 200` | Alarm when NVDA trades at or below 200 |
 | `/sa alert NVDA clear` | Remove the alarms on NVDA |
+| `/sa alert NVDA > 250` | Same as `above`. `>=` also means above, and `<` or `<=` mean below. A `$` before the price is fine (`$250`) |
+| `/sa alert NVDA 250` | No above or below: the mod compares 250 with NVDA's current price, picks above (250 is higher) or below (250 is lower), and tells you which it chose |
 | `/sa dock` / `/sa dock 8` | Dock the watchlist table above the prompt (optionally with a row count, 1 to 25) |
 | `/sa undock` | Just the one-line ticker strip, no table |
 | `/sa hide` / `/sa show` | Hide or show the ticker (table and strip) |
@@ -81,13 +104,15 @@ SA  AAPL 340.42 ▼0.00%  NVDA 230.48 ▼0.03%  ! MSFT 522.61 ▼0.02%  TSLA 375
   the prompt. The table never takes keystrokes while you type.
 - `/sa dock` and `/sa undock` are saved and override the `display` setting.
 
-The `/sa` pane lists the key commands at the bottom, and until you set an alarm it shows
-*No alarms. Try /sa alert NVDA above 250*.
+Until you set an alarm, the docked table and the `/sa` pane show *No alarms yet. Type /sa alert NVDA above 250 and press
+Enter*. The `/sa` pane also lists the key commands at the bottom. If you type `/sa alert` without a symbol, direction or
+price, the mod replies with an example instead of an error.
 
-All `/sa` commands run immediately, even while Claude is in the middle of a turn. Your watchlist, alarms, dock and hint
-settings are saved locally and shared by every Claude Code session on your machine.
+All `/sa` commands run immediately, even while Claude is in the middle of a turn, and they don't use Claude tokens. Your
+watchlist, alarms, dock and hint settings are saved locally and shared by every Claude Code session on your machine.
 
-Alerts in this mod are local: they only fire while a Claude Code session is open. For alerts on your phone, see below.
+Alerts in this mod are local to Claude Code on this computer: they only fire while a Claude Code session is open. For
+alerts on your phone, see below.
 
 ## Settings
 

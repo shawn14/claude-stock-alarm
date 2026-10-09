@@ -22,10 +22,21 @@ const MAX_SYMBOLS = 25
 // Dim hint at the end of the ticker strip; the first thing dropped when space is short
 export const BAND_HINT = '· /sa help'
 // Shown once per user (flag kept in $.store), a moment after the first session starts
-export const FIRST_RUN_TIP = 'Stock Alarm: /sa to open watchlist · /sa add AMD · /sa alert NVDA above 250'
+export const FIRST_RUN_TIP = 'Stock Alarm: to set an alarm, type /sa alert NVDA above 250 and press Enter · /sa opens your watchlist · /sa help for more'
 const FIRST_RUN_TIP_KEY = 'firstRunTipShown'
 const FIRST_RUN_TIP_DELAY_MS = 1500
-export const EMPTY_ALARMS = 'No alarms. Try /sa alert NVDA above 250'
+// Shown in the docked table and the /sa pane until an alarm is set
+export const EMPTY_ALARMS = 'No alarms yet. Type /sa alert NVDA above 250 and press Enter'
+// Friendly reply to /sa alert with missing or unreadable arguments
+export function alertUsage(sym) {
+  const s = sym || 'NVDA'
+  return [
+    'To set an alarm, type the symbol, above or below, and a price, then press Enter:',
+    '  /sa alert ' + s + ' above 250',
+    '  /sa alert ' + s + ' below 200',
+    'To remove alarms on ' + s + ': /sa alert ' + s + ' clear',
+  ].join('\n')
+}
 // The docked table (display "panel", /sa dock)
 export const DEFAULT_PANEL_ROWS = 5
 // Below this many terminal rows, or this many band columns, the table folds to the strip
@@ -166,6 +177,62 @@ export function alarmWords(a) {
   return parts.join(' · ')
 }
 
+const ABOVE_WORDS = ['above', 'over', '>', '>=', '=>', '≥']
+const BELOW_WORDS = ['below', 'under', '<', '<=', '=<', '≤']
+const CLEAR_WORDS = ['clear', 'off', 'none', 'remove', 'delete', 'rm']
+
+// A price as typed: 250, $250, 1,250.50. Returns undefined when it isn't one.
+export function parsePrice(text) {
+  const t = String(text || '').trim().replace(/^\$/, '').replace(/,/g, '')
+  if (!/^\d*\.?\d+$/.test(t)) return undefined
+  const n = Number(t)
+  return Number.isFinite(n) && n > 0 ? n : undefined
+}
+
+// Reads what follows "/sa alert", forgivingly:
+//   NVDA above 250 | NVDA below 200 | nvda > 250 | NVDA >= $250 | NVDA<=200 | NVDA 250 | NVDA clear
+// Returns { kind: 'set', sym, side, level } (side undefined: infer it from the price),
+// { kind: 'clear', sym }, or { kind: 'usage', sym? } when it can't tell what was meant.
+export function parseAlertArgs(text) {
+  const words = String(text || '')
+    .replace(/(>=|<=|=>|=<|≥|≤|>|<)/g, ' $1 ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+  if (!words.length) return { kind: 'usage' }
+  const first = words[0].toLowerCase()
+  // No symbol: "/sa alert above 250" or "/sa alert 250"
+  if (ABOVE_WORDS.includes(first) || BELOW_WORDS.includes(first) || CLEAR_WORDS.includes(first) || parsePrice(first) !== undefined) {
+    return { kind: 'usage' }
+  }
+  const sym = parseSymbols(words[0])[0]
+  if (!sym) return { kind: 'usage' }
+  const rest = words.slice(1)
+  if (rest.length === 1 && CLEAR_WORDS.includes(rest[0].toLowerCase())) return { kind: 'clear', sym }
+  let side
+  let priceWord
+  if (rest.length === 2) {
+    const d = rest[0].toLowerCase()
+    side = ABOVE_WORDS.includes(d) ? 'above' : BELOW_WORDS.includes(d) ? 'below' : undefined
+    if (!side) return { kind: 'usage', sym }
+    priceWord = rest[1]
+  } else if (rest.length === 1) {
+    priceWord = rest[0]
+  } else {
+    return { kind: 'usage', sym }
+  }
+  const level = parsePrice(priceWord)
+  if (level === undefined) return { kind: 'usage', sym }
+  return { kind: 'set', sym, side, level }
+}
+
+// "/sa alert NVDA 250": above when the target is over the current price, below
+// when it's under (a target equal to the price counts as above)
+export function inferSide(level, price) {
+  if (price === undefined || level === undefined) return undefined
+  return level >= price ? 'above' : 'below'
+}
+
 // The band's layout for a display option and the /sa dock | undock override:
 // 'panel' (docked table + strip), 'band' (strip only), 'status' or 'off'
 export function displayMode(display, docked) {
@@ -176,9 +243,10 @@ export function displayMode(display, docked) {
 }
 
 // Rows the docked table takes: its border (2), title, column header, one per
-// symbol, a "+N more" row when the list is longer, and the Add/commands row
-export function panelHeight(symbolRows, hasMore) {
-  return 2 + 1 + 1 + symbolRows + (hasMore ? 1 : 0) + 1
+// symbol, a "+N more" row when the list is longer, the "No alarms yet" row
+// when it shows, and the Add/commands row
+export function panelHeight(symbolRows, hasMore, hasEmptyAlarms = false) {
+  return 2 + 1 + 1 + symbolRows + (hasMore ? 1 : 0) + (hasEmptyAlarms ? 1 : 0) + 1
 }
 
 // How many symbol rows the docked table draws, or 0 to fold to the one-line strip.
@@ -255,7 +323,14 @@ function listText() {
 }
 
 const HELP = [
-  'Stock Alarm commands',
+  'Stock Alarm commands (type one in the prompt and press Enter)',
+  '',
+  'Set an alarm',
+  '  /sa alert NVDA above 250   alarm when NVDA trades at or above 250',
+  '  /sa alert NVDA below 200   alarm when NVDA trades at or below 200',
+  '  /sa alert NVDA clear       remove the alarms on NVDA',
+  '  Also works: /sa alert nvda > 250, /sa alert NVDA >= $250, and /sa alert NVDA 250',
+  '  (with no above or below, it picks one from the current price and tells you which)',
   '',
   'Watchlist',
   '  /sa                        open the full watchlist pane (Esc closes it)',
@@ -263,11 +338,6 @@ const HELP = [
   '  /sa rm TSLA                remove symbols (also /sa-rm)',
   '  /sa list                   print the watchlist with quotes',
   '  /sa open NVDA              open NVDA on Stock Alarm Pro',
-  '',
-  'Alarms',
-  '  /sa alert NVDA above 250   alarm when NVDA trades at or above 250',
-  '  /sa alert NVDA below 200   alarm when NVDA trades at or below 200',
-  '  /sa alert NVDA clear       remove the alarms on NVDA',
   '',
   'Display',
   '  /sa dock [rows]            dock the watchlist table above the prompt (default 5 rows)',
@@ -279,7 +349,8 @@ const HELP = [
   '  /sa help                   this list',
   '',
   'The docked table folds to the strip when the terminal is under 30 rows or 60 columns.',
-  'Alarms are local: they fire while a Claude Code session is open.',
+  'Alarms are local to Claude Code on this computer: they fire while a session is open.',
+  'These commands run in the mod and use no Claude tokens.',
 ].join('\n')
 
 // Key commands, shown at the bottom of the /sa pane
@@ -379,6 +450,22 @@ async function refresh($) {
     inflight = false
     $.ui.invalidate('ui.render')
   }
+}
+
+// A fresh quote for one symbol (on the watchlist or not), or undefined
+async function fetchQuote($, sym) {
+  try {
+    if (endpoint.includes('{symbols}')) {
+      const got = quotesFromBulk(await getJson($, endpoint.replace('{symbols}', encodeURIComponent(sym))))
+      if (got[sym]) quotes[sym] = got[sym]
+    } else {
+      const q = normalizeQuote(await getJson($, endpoint.replace('{symbol}', encodeURIComponent(sym))), sym)
+      if (q) quotes[sym] = q
+    }
+  } catch {
+    // Handled by the caller: no quote
+  }
+  return quotes[sym]
 }
 
 async function checkAlarms($) {
@@ -482,24 +569,45 @@ async function handleCommand($, argText) {
     return { text: removed.length ? 'Removed ' + removed.join(', ') + '. Watchlist: ' + (watchlist.join(' ') || '(empty)') : 'None of those are on the watchlist.' }
   }
   if (sub === 'alert' || sub === 'alarm') {
-    const sym = parseSymbols(words[1])[0]
-    const dir = (words[2] || '').toLowerCase()
-    if (!sym) return { text: 'Usage: /sa alert NVDA above 250 | /sa alert NVDA below 200 | /sa alert NVDA clear' }
-    if (dir === 'clear' || dir === 'off' || dir === 'none') {
+    const parsed = parseAlertArgs(String(argText || '').trim().replace(/^\S+\s*/, ''))
+    if (parsed.kind === 'usage') return { text: alertUsage(parsed.sym) }
+    const sym = parsed.sym
+    if (parsed.kind === 'clear') {
+      const had = !!alerts[sym]
       delete alerts[sym]
       delete firing[sym]
       await saveAlerts($)
       $.ui.invalidate('ui.render')
-      return { text: 'Cleared alarms on ' + sym + '.' }
+      return { text: had ? 'Cleared alarms on ' + sym + '.' : 'No alarms on ' + sym + ' to clear.' }
     }
-    const level = num(Number(String(words[3] || '').replace(/[$,]/g, '')))
-    const side = dir === 'above' || dir === '>' || dir === '>=' ? 'above' : dir === 'below' || dir === '<' || dir === '<=' ? 'below' : undefined
-    if (!side || level === undefined || level <= 0) return { text: 'Usage: /sa alert ' + sym + ' above 250 | below 200 | clear' }
+    const level = parsed.level
+    let side = parsed.side
+    let note = ''
+    if (!side) {
+      const q = quotes[sym] || (await fetchQuote($, sym))
+      side = inferSide(level, q && q.price)
+      if (!side) {
+        return {
+          text:
+            "Couldn't get " + sym + "'s current price to tell if " + fmtPrice(level) + ' is above or below it. Type one of these and press Enter:\n' +
+            '  /sa alert ' + sym + ' above ' + fmtPrice(level) + '\n' +
+            '  /sa alert ' + sym + ' below ' + fmtPrice(level),
+        }
+      }
+      const other = side === 'above' ? 'below' : 'above'
+      note =
+        ' ' + sym + ' is at ' + fmtPrice(q.price) + ', so I chose ' + side + '. If you meant ' + other + ', type /sa alert ' + sym + ' ' + other + ' ' + fmtPrice(level) + '.'
+    }
     alerts = { ...alerts, [sym]: { ...(alerts[sym] || {}), [side]: level } }
     await saveAlerts($)
     if (!watchlist.includes(sym)) await addSymbols($, [sym])
     else await refresh($)
-    return { text: 'Alarm set: ' + sym + ' ' + side + ' ' + fmtPrice(level) + '. Current: ' + (quotes[sym] ? fmtPrice(quotes[sym].price) : 'n/a') + '.' }
+    const current = quotes[sym] ? ' Current: ' + fmtPrice(quotes[sym].price) + '.' : ''
+    return {
+      text:
+        'Alarm set: ' + sym + ' ' + side + ' ' + fmtPrice(level) + '.' + (note || current) +
+        ' It shows in the ALARM column, and you get a notification in Claude Code when the price crosses.',
+    }
   }
   if (sub === 'open') {
     const sym = parseSymbols(rest)[0]
@@ -639,7 +747,7 @@ function stripRow(ui, width) {
 
 // The docked watchlist table: SYMBOL / PRICE / CHANGE / ALARM / ACTIONS, an Add
 // field and the command footer, in a rounded box `rows` symbols tall
-function panelBox($, ui, width, rows) {
+function panelBox($, ui, width, rows, showEmptyAlarms = false) {
   const { Box, Text, Button, Input } = ui
   const inner = Math.max(20, width - 4) // border and one column of padding each side
   const W = { sym: 8, price: 10, change: 10, actions: 10 }
@@ -731,6 +839,7 @@ function panelBox($, ui, width, rows) {
       header,
       ...body,
       ...(more > 0 ? [Text({ dimColor: true, children: ['+' + more + ' more · /sa for the full list · /sa dock ' + Math.min(MAX_SYMBOLS, watchlist.length) + ' to show all'] })] : []),
+      ...(showEmptyAlarms ? [Text({ color: 'yellow', wrap: 'truncate', children: [EMPTY_ALARMS] })] : []),
       footer,
     ],
   })
@@ -774,13 +883,16 @@ export function register(on, options) {
     const width = Math.max(20, props.bodyColumns || 80)
     const strip = stripRow(ui, width)
     let rows = 0
+    let showEmpty = false
     // A survey holds the band first: fold to the strip while one shows
     if (m === 'panel' && !props.hasSurvey) {
       const maxRows = typeof props.maxRows === 'number' ? props.maxRows : 40
       const terminalRows = e.viewport && typeof e.viewport.rows === 'number' ? e.viewport.rows : maxRows
       rows = fitPanel({ want: panelRowsWanted(), total: watchlist.length, terminalRows, maxRows, columns: width })
+      // "No alarms yet" gets its own row when there's room for it beside the symbols and the strip
+      showEmpty = rows > 0 && alarmCount(watchlist, alerts) === 0 && panelHeight(rows, watchlist.length > rows, true) <= maxRows - 1
     }
-    const mine = rows > 0 ? Box({ flexDirection: 'column', children: [panelBox($, ui, width, rows), strip] }) : strip
+    const mine = rows > 0 ? Box({ flexDirection: 'column', children: [panelBox($, ui, width, rows, showEmpty), strip] }) : strip
     const theirs = await next(e)
     return theirs ? Box({ flexDirection: 'column', children: [mine, theirs] }) : mine
   })
