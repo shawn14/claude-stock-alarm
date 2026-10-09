@@ -1,0 +1,4 @@
+{
+  "description": "Stock Alarm mod: the ticker band, the /sa pane and commands, and the quote refresh timer",
+  "modules": ["./register.js"]
+}

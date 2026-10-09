@@ -1,0 +1,12 @@
+{
+  "name": "stock-alarm",
+  "owner": { "name": "Shawn Carpenter", "email": "shawn14@gmail.com" },
+  "description": "Stock Alarm for Claude Code: live stock quotes and price alerts in your terminal",
+  "plugins": [
+    {
+      "name": "stock-alarm",
+      "source": "./stock-alarm",
+      "description": "Stock Alarm (SA) mod: live watchlist quotes above the prompt, a /sa watchlist pane, and local price alerts"
+    }
+  ]
+}

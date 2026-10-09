@@ -1,0 +1,52 @@
+{
+  "name": "stock-alarm",
+  "version": "0.1.0",
+  "description": "Stock Alarm (SA) mod: a live watchlist ticker strip above the prompt, a /sa watchlist pane, local price alerts, and /sa commands to add, remove, and open symbols on stockalarm.io. Quotes come from Stock Alarm's public tickers feed.",
+  "author": {
+    "name": "Shawn Carpenter",
+    "email": "shawn14@gmail.com"
+  },
+  "homepage": "https://stockalarm.io",
+  "repository": "https://github.com/shawn14/claude-stock-alarm",
+  "license": "MIT",
+  "keywords": [
+    "stocks",
+    "stock-alarm",
+    "quotes",
+    "price-alerts",
+    "mod"
+  ],
+  "userConfig": {
+    "watchlist": {
+      "type": "string",
+      "title": "Default watchlist",
+      "description": "Space- or comma-separated symbols used until you change the list with /sa add or /sa rm",
+      "default": "AAPL NVDA MSFT TSLA"
+    },
+    "quote_endpoint": {
+      "type": "string",
+      "title": "Quote endpoint",
+      "description": "Optional URL template for quotes. Use {symbol} for one request per symbol or {symbols} for one bulk request. Empty means Stock Alarm's public tickers feed. The SA_QUOTE_ENDPOINT environment variable overrides this.",
+      "default": ""
+    },
+    "refresh_seconds": {
+      "type": "number",
+      "title": "Refresh interval (seconds)",
+      "description": "How often to refresh quotes",
+      "default": 30,
+      "min": 10,
+      "max": 600
+    },
+    "display": {
+      "type": "string",
+      "title": "Where to show the ticker",
+      "description": "band: a strip above the prompt. status: one line under the prompt. off: only the /sa pane.",
+      "options": [
+        "band",
+        "status",
+        "off"
+      ],
+      "default": "band"
+    }
+  }
+}
