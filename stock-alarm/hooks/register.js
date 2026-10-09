@@ -13,12 +13,20 @@ const DEFAULT_ENDPOINT = 'https://stockalarm-8b019.firebaseio.com/tickers/{symbo
 const DEFAULT_WATCHLIST = ['AAPL', 'NVDA', 'MSFT', 'TSLA']
 const SYMBOL_PAGE = 'https://app.stockalarm.io/symbols/'
 const MAX_SYMBOLS = 25
+// Dim hint at the end of the ticker strip; the first thing dropped when space is short
+export const BAND_HINT = '· /sa help'
+// Shown once per user (flag kept in $.store), a moment after the first session starts
+export const FIRST_RUN_TIP = 'Stock Alarm: /sa to open watchlist · /sa add AMD · /sa alert NVDA above 250'
+const FIRST_RUN_TIP_KEY = 'firstRunTipShown'
+const FIRST_RUN_TIP_DELAY_MS = 1500
+export const EMPTY_ALARMS = 'No alarms. Try /sa alert NVDA above 250'
 
 // ---------- module state (rebuilt on reload; durable bits live in $.store) ----------
 let opts = {}
 let watchlist = DEFAULT_WATCHLIST.slice()
 let alerts = {} // { SYM: { above?: number, below?: number } }
 let bandHidden = false
+let hintsHidden = false // /sa hints off: no "· /sa help" in the strip or status line
 let quotes = {} // { SYM: normalized quote }
 let errors = {} // { SYM: message }
 let lastUpdated = 0
@@ -164,30 +172,67 @@ function listText() {
 }
 
 const HELP = [
-  'Stock Alarm commands:',
-  '  /sa                         open the Stock Alarm pane',
-  '  /sa list                    print the watchlist with quotes',
-  '  /sa add NVDA AMD            add symbols (also /sa-add)',
-  '  /sa rm TSLA                 remove symbols (also /sa-rm)',
-  '  /sa alert NVDA above 250    alarm when price >= 250 (or: below 200, clear)',
-  '  /sa open NVDA               open NVDA on stockalarm.io',
-  '  /sa refresh                 refresh quotes now',
-  '  /sa hide | /sa show         hide or show the ticker band',
-  '  /sa reset                   back to the default watchlist, clear alarms',
+  'Stock Alarm commands',
+  '',
+  'Watchlist',
+  '  /sa                        open the watchlist pane (Esc closes it)',
+  '  /sa add AMD PLTR           add symbols (also /sa-add)',
+  '  /sa rm TSLA                remove symbols (also /sa-rm)',
+  '  /sa list                   print the watchlist with quotes',
+  '  /sa open NVDA              open NVDA on stockalarm.io',
+  '',
+  'Alarms',
+  '  /sa alert NVDA above 250   alarm when NVDA trades at or above 250',
+  '  /sa alert NVDA below 200   alarm when NVDA trades at or below 200',
+  '  /sa alert NVDA clear       remove the alarms on NVDA',
+  '',
+  'Display',
+  '  /sa hide | /sa show        hide or show the ticker strip',
+  '  /sa hints off | on         hide or show the "/sa help" hint in the strip',
+  '  /sa refresh                refresh quotes now',
+  '  /sa reset                  default watchlist, all alarms cleared',
+  '  /sa help                   this list',
+  '',
+  'Alarms are local: they fire while a Claude Code session is open.',
 ].join('\n')
+
+// Key commands, shown at the bottom of the /sa pane
+export const PANE_FOOTER = [
+  '/sa add AMD · /sa rm TSLA · /sa open NVDA · /sa help',
+  '/sa alert NVDA above 250 · below 200 · clear',
+]
+
+// How many symbols on the watchlist have an alarm set
+export function alarmCount(list, alertMap) {
+  return list.filter((s) => {
+    const a = alertMap && alertMap[s]
+    return !!a && (a.above !== undefined || a.below !== undefined)
+  }).length
+}
 
 // ---------- mods API helpers (top-level so validation can see the calls) ----------
 async function loadSaved($) {
   const savedList = await $.store.get('watchlist')
   const savedAlerts = await $.store.get('alerts')
   const savedHidden = await $.store.get('bandHidden')
+  const savedHints = await $.store.get('hintsHidden')
   if (Array.isArray(savedList) && savedList.length) watchlist = parseSymbols(savedList.join(' ')).slice(0, MAX_SYMBOLS)
   else {
     const fromOpts = parseSymbols(opts.watchlist)
     watchlist = (fromOpts.length ? fromOpts : DEFAULT_WATCHLIST).slice(0, MAX_SYMBOLS)
   }
-  if (savedAlerts && typeof savedAlerts === 'object') alerts = { ...savedAlerts }
+  alerts = savedAlerts && typeof savedAlerts === 'object' ? { ...savedAlerts } : {}
   bandHidden = savedHidden === true
+  hintsHidden = savedHints === true
+}
+
+// The one-time first-run tip. Returns true when it was shown.
+async function showFirstRunTip($) {
+  const seen = await $.store.get(FIRST_RUN_TIP_KEY)
+  if (seen === true) return false
+  await $.store.set(FIRST_RUN_TIP_KEY, true)
+  $.ui.toast(FIRST_RUN_TIP, { timeoutMs: 15000 })
+  return true
 }
 
 async function saveWatchlist($) {
@@ -261,7 +306,7 @@ async function checkAlarms($) {
 
 async function showStatus($) {
   if (opts.display !== 'status' || bandHidden) return
-  $.ui.status(tickerLine())
+  $.ui.status(tickerLine() + (hintsHidden ? '' : '  ' + BAND_HINT))
 }
 
 async function openSymbol($, symbol) {
@@ -319,7 +364,18 @@ async function handleCommand($, argText) {
     await refresh($)
     return {}
   }
-  if (sub === 'help') return { text: HELP }
+  if (sub === 'help' || sub === '?' || sub === '-h' || sub === '--help') return { text: HELP }
+  if (sub === 'hints' || sub === 'hint') {
+    const arg = (words[1] || '').toLowerCase()
+    if (arg !== 'on' && arg !== 'off') return { text: 'Usage: /sa hints off | /sa hints on. Hints are ' + (hintsHidden ? 'off' : 'on') + '.' }
+    hintsHidden = arg === 'off'
+    await $.store.set('hintsHidden', hintsHidden)
+    // Someone turning hints off doesn't need the first-run tip either
+    if (hintsHidden) await $.store.set(FIRST_RUN_TIP_KEY, true)
+    await showStatus($)
+    $.ui.invalidate('ui.render')
+    return { text: hintsHidden ? 'Hints off. /sa hints on brings them back.' : 'Hints on.' }
+  }
   if (sub === 'list' || sub === 'ls') {
     await refresh($)
     return { text: listText() }
@@ -402,7 +458,7 @@ async function handleCommand($, argText) {
 
 async function registerCommands($) {
   const specs = [
-    { name: 'sa', description: 'Stock Alarm: open the quotes pane, or add | rm | alert | open | list | hide | show', argumentHint: '[add|rm|alert|open|list|refresh|hide|show|help] [args]', immediate: true },
+    { name: 'sa', description: 'Stock Alarm: open the watchlist pane, or add | rm | alert | open | list | help', argumentHint: '[add|rm|alert|open|list|refresh|hide|show|hints|reset|help] [args]', immediate: true },
     { name: 'sa-add', description: 'Stock Alarm: add symbols to the watchlist', argumentHint: '<SYMBOL ...>', immediate: true },
     { name: 'sa-rm', description: 'Stock Alarm: remove symbols from the watchlist', argumentHint: '<SYMBOL ...>', immediate: true },
   ]
@@ -434,6 +490,10 @@ export function register(on, options) {
     $.clock.every(seconds * 1000, () => refresh($))
     // First fetch right away, without holding up the session start
     $.clock.after(0, () => refresh($))
+    // One-time tip so new users find /sa; a short delay lets the interface settle
+    $.clock.after(FIRST_RUN_TIP_DELAY_MS, () => {
+      showFirstRunTip($).catch((err) => $.ui.log('first-run tip: ' + String((err && err.message) || err), { to: 'debug' }))
+    })
     await registerCommands($)
     return next(e)
   })
@@ -451,6 +511,7 @@ export function register(on, options) {
     const items = [Text({ bold: true, color: 'yellow', children: ['SA'] })]
     let used = 3
     let shown = 0
+    let truncated = false
     for (const s of watchlist) {
       const q = quotes[s]
       const label = s + ' ' + (q ? fmtPrice(q.price) + ' ' + fmtPct(q.pct) : errors[s] ? '?' : '…')
@@ -458,6 +519,7 @@ export function register(on, options) {
       const cell = (firingSide ? '! ' : '') + label
       if (used + cell.length + 2 > width - 4 && shown > 0) {
         items.push(Text({ dimColor: true, children: ['+' + (watchlist.length - shown)] }))
+        truncated = true
         break
       }
       used += cell.length + 2
@@ -470,7 +532,14 @@ export function register(on, options) {
       }
     }
     const open = anyOpen()
-    if (open === false && used + 8 < width) items.push(Text({ dimColor: true, children: ['closed'] }))
+    if (open === false && used + 8 < width) {
+      items.push(Text({ dimColor: true, children: ['closed'] }))
+      used += 8
+    }
+    // The hint goes last and only into room that's left, so it never pushes a quote off
+    if (!hintsHidden && !truncated && used + BAND_HINT.length + 2 <= width - 4) {
+      items.push(Text({ dimColor: true, children: [BAND_HINT] }))
+    }
     const mine = Box({ flexDirection: 'row', columnGap: 2, children: items })
     const theirs = await next(e)
     return theirs ? Box({ flexDirection: 'column', children: [mine, theirs] }) : mine
@@ -524,7 +593,11 @@ export function register(on, options) {
           },
         }),
         ...rows,
-        Text({ dimColor: true, children: ['Source: ' + sourceLabel + ' · /sa alert NVDA above 250 · /sa help'] }),
+        ...(watchlist.length === 0 ? [Text({ dimColor: true, children: ['Watchlist empty. Type symbols in Add above, or /sa add AMD'] })] : []),
+        ...(alarmCount(watchlist, alerts) === 0 ? [Text({ dimColor: true, children: [EMPTY_ALARMS] })] : []),
+        Text({ children: [' '] }),
+        ...PANE_FOOTER.map((line) => Text({ dimColor: true, children: [line] })),
+        Text({ dimColor: true, children: ['Source: ' + sourceLabel] }),
       ],
     })
   })

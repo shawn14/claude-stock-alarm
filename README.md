@@ -32,21 +32,31 @@ Remove it: `claude plugin uninstall stock-alarm@stock-alarm && claude plugin mar
 
 ## Usage
 
+Not sure what to type? Run **`/sa help`**. The ticker strip ends with a dim `· /sa help` hint when there's room for it
+(it's the first thing dropped in a narrow terminal, so it never pushes a quote off), and the first time the mod runs it
+shows a one-time tip: *Stock Alarm: /sa to open watchlist · /sa add AMD · /sa alert NVDA above 250*.
+
 | Command | What it does |
 | --- | --- |
 | `/sa` | Open the watchlist pane (Esc closes it; type symbols in "Add" and press Enter) |
-| `/sa list` | Print the watchlist with fresh quotes |
-| `/sa add NVDA AMD` or `/sa-add NVDA AMD` | Add symbols (up to 25) |
+| `/sa add AMD PLTR` or `/sa-add AMD PLTR` | Add symbols (up to 25) |
 | `/sa rm TSLA` or `/sa-rm TSLA` | Remove symbols |
-| `/sa alert NVDA above 250` | Alert when NVDA trades at or above 250 (also `below 200`, or `clear`) |
+| `/sa list` | Print the watchlist with fresh quotes |
 | `/sa open NVDA` | Open NVDA on stockalarm.io in your browser |
-| `/sa refresh` | Refresh quotes now |
+| `/sa alert NVDA above 250` | Alarm when NVDA trades at or above 250 |
+| `/sa alert NVDA below 200` | Alarm when NVDA trades at or below 200 |
+| `/sa alert NVDA clear` | Remove the alarms on NVDA |
 | `/sa hide` / `/sa show` | Hide or show the ticker strip |
-| `/sa reset` | Back to the default watchlist, alerts cleared |
+| `/sa hints off` / `/sa hints on` | Hide or show the `· /sa help` hint in the strip (for power users) |
+| `/sa refresh` | Refresh quotes now |
+| `/sa reset` | Back to the default watchlist, alarms cleared |
 | `/sa help` | List the commands |
 
-All `/sa` commands run immediately, even while Claude is in the middle of a turn. Your watchlist and alerts are saved
-locally and shared by every Claude Code session on your machine.
+The `/sa` pane lists the key commands at the bottom, and until you set an alarm it shows
+*No alarms. Try /sa alert NVDA above 250*.
+
+All `/sa` commands run immediately, even while Claude is in the middle of a turn. Your watchlist, alarms, and hint
+setting are saved locally and shared by every Claude Code session on your machine.
 
 Alerts in this mod are local: they only fire while a Claude Code session is open. For alerts on your phone, see below.
 
@@ -114,7 +124,7 @@ stock-alarm/                      # the mod
 └── tests/stock-alarm.test.ts     # tests for `claude plugin test`
 ```
 
-The mods API can change between Claude Code releases. This version was tested with Claude Code 2.1.294.
+The mods API can change between Claude Code releases. This version was tested with Claude Code 2.1.295.
 
 ## License
 

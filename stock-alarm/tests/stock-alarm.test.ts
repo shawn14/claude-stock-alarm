@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { normalizeQuote, parseSymbols, alarmState, fmtPct } from '../hooks/register.js'
+import { normalizeQuote, parseSymbols, alarmState, fmtPct, alarmCount, BAND_HINT, EMPTY_ALARMS, FIRST_RUN_TIP, PANE_FOOTER } from '../hooks/register.js'
 
 // A tickers/<SYMBOL> node shaped like Stock Alarm's feed
 const node = (symbol: string, latestPrice: number, previousClose: number) => ({
@@ -126,4 +126,163 @@ test('the pane lists symbols and its input adds one', async ($, on) => {
   await pane.input({ key: 'add', text: 'amd' })
   expect(saved.get('watchlist')).toEqual(['AAPL', 'NVDA', 'MSFT', 'TSLA', 'AMD'])
   await pane.unmount()
+})
+
+// ---------- discoverability: band hint, first-run tip, pane footer and empty state ----------
+
+const bandAt = ($: any, columns: number) =>
+  $.ui.mount({
+    plugin: 'stock-alarm',
+    component: 'AbovePrompt',
+    requestId: 'above',
+    surface: 'terminal',
+    viewport: { columns: columns + 10, rows: 40 },
+    props: { hasSurvey: false, isWorking: false, maxRows: 4, bodyColumns: columns, scroll: { offset: 0, bodyRows: 4 }, view: {} },
+  } as any)
+
+const mountPane = ($: any) =>
+  $.ui.mount({
+    plugin: 'stock-alarm',
+    component: 'Pane',
+    requestId: 'stock-alarm',
+    surface: 'terminal',
+    viewport: { columns: 120, rows: 40 },
+    props: { title: 'Stock Alarm', isFocused: true, bodyColumns: 60, placement: 'inline', scroll: { offset: 0, bodyRows: 20 }, view: {} },
+  } as any)
+
+test('the band ends with a dim /sa help hint that is dropped first when narrow', async ($, on) => {
+  const saved = new Map<string, unknown>()
+  const clock = mock.clock(on)
+  stubAll(on, saved, [], [])
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await clock.advance(1)
+
+  // Wide: all four quotes and the hint, the hint last
+  const wide = await bandAt($, 150)
+  const hint = await wide.find({ type: 'Text', text: BAND_HINT })
+  expect(hint).toBeDefined()
+  // The strip's own texts (the stub's 'drawn by Claude Code' sits on a row below it)
+  const texts = (await wide.findAll({ type: 'Text' })).map((t: any) => t.text).filter((t: string) => t !== 'drawn by Claude Code')
+  expect(texts[texts.length - 1]).toBe(BAND_HINT)
+  await wide.unmount()
+
+  // Just wide enough for every quote: the hint goes, the quotes stay
+  const snug = await bandAt($, 90)
+  expect(await snug.find({ type: 'Text', text: BAND_HINT })).toBeUndefined()
+  expect(await snug.find({ type: 'Text', text: 'TSLA 375.00' })).toBeDefined()
+  expect(await snug.find({ type: 'Text', text: /^\+\d/ })).toBeUndefined()
+  await snug.unmount()
+
+  // Narrow: quotes overflow into +N and there's no hint
+  const narrow = await bandAt($, 50)
+  expect(await narrow.find({ type: 'Text', text: BAND_HINT })).toBeUndefined()
+  expect(await narrow.find({ type: 'Text', text: /^\+\d/ })).toBeDefined()
+  await narrow.unmount()
+})
+
+test('/sa hints off hides the hint and is saved; /sa hints on brings it back', async ($, on) => {
+  const saved = new Map<string, unknown>()
+  const clock = mock.clock(on)
+  stubAll(on, saved, [], [])
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await clock.advance(1)
+
+  const off = await $.command.run({ command: 'sa', args: 'hints off' })
+  expect(off.text).toContain('Hints off')
+  expect(saved.get('hintsHidden')).toBe(true)
+  expect(saved.get('watchlist')).toBeUndefined() // "hints" is not taken as a symbol
+  let band = await bandAt($, 150)
+  expect(await band.find({ type: 'Text', text: BAND_HINT })).toBeUndefined()
+  expect(await band.find({ type: 'Text', text: 'AAPL 340.42' })).toBeDefined()
+  await band.unmount()
+
+  // Still off after a reload
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await clock.advance(1)
+  band = await bandAt($, 150)
+  expect(await band.find({ type: 'Text', text: BAND_HINT })).toBeUndefined()
+  await band.unmount()
+
+  const on_ = await $.command.run({ command: 'sa', args: 'hints on' })
+  expect(on_.text).toContain('Hints on')
+  expect(saved.get('hintsHidden')).toBe(false)
+  band = await bandAt($, 150)
+  expect(await band.find({ type: 'Text', text: BAND_HINT })).toBeDefined()
+  await band.unmount()
+
+  const usage = await $.command.run({ command: 'sa', args: 'hints' })
+  expect(usage.text).toContain('Usage: /sa hints off')
+})
+
+test('the first-run tip shows once and saves a flag', async ($, on) => {
+  const saved = new Map<string, unknown>()
+  const toasts: string[] = []
+  const clock = mock.clock(on)
+  stubAll(on, saved, toasts, [])
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await clock.advance(2000)
+  expect(toasts.filter((t) => t === FIRST_RUN_TIP)).toHaveLength(1)
+  expect(FIRST_RUN_TIP).toBe('Stock Alarm: /sa to open watchlist · /sa add AMD · /sa alert NVDA above 250')
+  expect(saved.get('firstRunTipShown')).toBe(true)
+
+  // A later session (same saved state) doesn't show it again
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await clock.advance(2000)
+  expect(toasts.filter((t) => t === FIRST_RUN_TIP)).toHaveLength(1)
+})
+
+test('the first-run tip stays hidden when the flag is already saved', async ($, on) => {
+  const saved = new Map<string, unknown>([['firstRunTipShown', true]])
+  const toasts: string[] = []
+  const clock = mock.clock(on)
+  stubAll(on, saved, toasts, [])
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await clock.advance(2000)
+  expect(toasts.includes(FIRST_RUN_TIP)).toBe(false)
+})
+
+test('the pane shows a command footer, and an empty state until an alarm is set', async ($, on) => {
+  const saved = new Map<string, unknown>()
+  const clock = mock.clock(on)
+  stubAll(on, saved, [], [])
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await clock.advance(1)
+
+  let pane = await mountPane($)
+  expect(await pane.find({ type: 'Text', text: EMPTY_ALARMS })).toBeDefined()
+  for (const line of PANE_FOOTER) expect(await pane.find({ type: 'Text', text: line })).toBeDefined()
+  for (const word of ['/sa add', '/sa rm', 'alert NVDA above', 'below', 'clear', '/sa open', '/sa help']) {
+    expect(PANE_FOOTER.join(' ')).toContain(word)
+  }
+  await pane.unmount()
+
+  await $.command.run({ command: 'sa', args: 'alert NVDA above 250' })
+  pane = await mountPane($)
+  expect(await pane.find({ type: 'Text', text: EMPTY_ALARMS })).toBeUndefined()
+  expect(await pane.find({ type: 'Text', text: 'alarm ≥250.00' })).toBeDefined()
+  await pane.unmount()
+
+  await $.command.run({ command: 'sa', args: 'alert NVDA clear' })
+  pane = await mountPane($)
+  expect(await pane.find({ type: 'Text', text: EMPTY_ALARMS })).toBeDefined()
+  await pane.unmount()
+})
+
+test('/sa help lists every command, including hints', async ($, on) => {
+  const saved = new Map<string, unknown>()
+  const clock = mock.clock(on)
+  stubAll(on, saved, [], [])
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await clock.advance(1)
+  const help = await $.command.run({ command: 'sa', args: 'help' })
+  for (const cmd of ['/sa add', '/sa rm', '/sa alert NVDA above 250', '/sa alert NVDA below 200', '/sa alert NVDA clear', '/sa open', '/sa hints off', '/sa hide']) {
+    expect(help.text).toContain(cmd)
+  }
+  expect(alarmCount(['NVDA', 'AAPL'], { NVDA: { above: 1 }, TSLA: { below: 2 } })).toBe(1)
 })

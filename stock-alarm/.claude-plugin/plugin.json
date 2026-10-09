@@ -1,6 +1,6 @@
 {
   "name": "stock-alarm",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Stock Alarm (SA) mod: a live watchlist ticker strip above the prompt, a /sa watchlist pane, local price alerts, and /sa commands to add, remove, and open symbols on stockalarm.io. Quotes come from Stock Alarm's public tickers feed.",
   "author": {
     "name": "Shawn Carpenter",
